@@ -1,0 +1,59 @@
+# Kubernetes HPA（Horizontal Pod Autoscaler，水平自动扩缩容）
+# 云原生核心能力之一：根据负载自动调整 Pod 数量
+# 这就是 SaaS 的弹性伸缩 —— 流量高时自动扩容，流量低时自动缩容
+#
+# 工作原理：
+# 1. Metrics Server 采集 Pod 的 CPU/内存使用率
+# 2. HPA Controller 定期检查指标是否超过阈值
+# 3. 超过阈值时，HPA 更新 Deployment 的 replicas 数量
+# 4. Deployment Controller 创建或删除 Pod
+#
+# 前提条件：集群中需要安装 Metrics Server
+# 安装命令：kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: saas-shortener-hpa
+  namespace: saas-shortener
+  labels:
+    app: saas-shortener
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: saas-shortener
+  
+  minReplicas: 2    # 最少 2 个副本（高可用）
+  maxReplicas: 10   # 最多 10 个副本
+  
+  metrics:
+    # 基于 CPU 使用率扩缩容
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # CPU 使用率超过 70% 时扩容
+    
+    # 基于内存使用率扩缩容
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80  # 内存使用率超过 80% 时扩容
+  
+  # 扩缩容行为配置（K8s 1.23+）
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60   # 扩容冷却期 60 秒
+      policies:
+        - type: Pods
+          value: 2          # 每次最多扩容 2 个 Pod
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 缩容冷却期 5 分钟（避免频繁缩容）
+      policies:
+        - type: Pods
+          value: 1          # 每次最多缩容 1 个 Pod
+          periodSeconds: 120

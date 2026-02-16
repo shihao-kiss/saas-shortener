@@ -1,0 +1,26 @@
+# Kubernetes Service（服务）
+# Service 为一组 Pod 提供稳定的网络访问入口
+# Pod 可能随时被创建或销毁，但 Service 的地址（ClusterIP/DNS）是固定的
+#
+# Service 类型说明：
+# - ClusterIP（默认）: 只在集群内部可访问
+# - NodePort: 在每个节点上开放端口，可从集群外访问
+# - LoadBalancer: 使用云提供商的负载均衡器（如 AWS ALB）
+# - ExternalName: 映射到外部 DNS 名称
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saas-shortener-service
+  namespace: saas-shortener
+  labels:
+    app: saas-shortener
+spec:
+  type: ClusterIP  # 集群内部访问，配合 Ingress 对外暴露
+  selector:
+    app: saas-shortener
+  ports:
+    - name: http
+      port: 80           # Service 端口
+      targetPort: http    # 容器端口（对应 Deployment 中的 containerPort）
+      protocol: TCP

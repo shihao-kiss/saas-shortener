@@ -1,0 +1,38 @@
+# Prometheus 配置文件
+# Prometheus 是云原生监控的事实标准，是 CNCF 毕业项目
+#
+# 核心概念：
+# 1. Pull 模式: Prometheus 主动从目标拉取指标，而非被动接收
+# 2. 时序数据: 所有指标都带时间戳，可以看趋势
+# 3. PromQL: 强大的查询语言，用于计算和聚合指标
+# 4. 服务发现: 在 K8s 中，Prometheus 可以自动发现新的 Pod
+#
+# 在 Docker Compose 本地开发中使用静态配置
+# 在 Kubernetes 生产环境中通常使用 ServiceMonitor（Prometheus Operator）
+global:
+  scrape_interval: 15s     # 每 15 秒采集一次指标
+  evaluation_interval: 15s  # 每 15 秒评估一次告警规则
+
+# 告警规则（后续可扩展）
+# rule_files:
+#   - "alerts.yml"
+
+# 采集目标配置
+scrape_configs:
+  # 采集 Prometheus 自身的指标
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 采集 SaaS 短链接服务的指标
+  - job_name: 'saas-shortener'
+    # Docker Compose 中使用静态配置
+    static_configs:
+      - targets: ['app:8080']   # Docker Compose 中的服务名
+        labels:
+          service: 'saas-shortener'
+          env: 'development'
+    # 采集路径
+    metrics_path: '/metrics'
+    # 采集间隔（覆盖全局配置）
+    scrape_interval: 10s

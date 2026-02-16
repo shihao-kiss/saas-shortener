@@ -1,0 +1,202 @@
+# Docker Compose - 本地开发环境
+# 一键启动所有依赖服务（PostgreSQL、Redis、Prometheus、Grafana）
+# 使用方式：docker-compose up -d
+#
+# 这模拟了生产环境中各个组件的配合：
+# - 应用服务（saas-shortener）
+# - 数据库（PostgreSQL） → 生产环境用云数据库（如 AWS RDS）
+# - 缓存（Redis）→ 生产环境用云 Redis（如 AWS ElastiCache）
+# - 监控（Prometheus）→ 生产环境用 Prometheus Operator
+# - 可视化（Grafana）→ 生产环境用 Grafana Cloud 或自建
+#
+# ==================== 资源规划（2C4G 服务器） ====================
+# 组件          | 内存限制 | 说明
+# Go 应用       | 128MB   | Go 二进制非常轻量
+# PostgreSQL    | 512MB   | 适当限制 shared_buffers
+# Redis         | 128MB   | 学习项目数据量小
+# Prometheus    | 512MB   | 限制时序数据内存占用
+# Grafana       | 256MB   | 前端服务
+# 合计          | ~1.5GB  | 预留约 2.5GB 给系统和 Docker 引擎
+
+services:
+  # ==================== 应用服务 ====================
+  app:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile
+    container_name: saas-shortener
+    ports:
+      - "8080:8080"
+    environment:
+      # 12-Factor App: 所有配置通过环境变量注入
+      - APP_ENV=development
+      - SERVER_PORT=8080
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=saas_shortener
+      - DB_SSLMODE=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - TENANT_DEFAULT_RATE_LIMIT=100
+      - TENANT_MAX_URLS=1000
+      # Go 运行时优化（小内存服务器）
+      - GOMAXPROCS=2
+      - GOMEMLIMIT=100MiB
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # 资源限制 - 防止单个容器吃满内存导致 OOM
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    networks:
+      - saas-network
+
+  # ==================== PostgreSQL 数据库 ====================
+  postgres:
+    image: postgres:16-alpine
+    container_name: saas-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=saas_shortener
+    # PostgreSQL 内存优化（适配小内存服务器）
+    command:
+      - "postgres"
+      - "-c" 
+      - "shared_buffers=128MB"        # 默认128MB，小服务器够用
+      - "-c"
+      - "effective_cache_size=256MB"   # 告诉优化器可用缓存大小
+      - "-c"
+      - "work_mem=4MB"                # 每个排序/哈希操作的内存
+      - "-c"
+      - "max_connections=50"          # 限制最大连接数（默认100太多）
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.8'
+          memory: 512M
+        reservations:
+          cpus: '0.2'
+          memory: 128M
+    networks:
+      - saas-network
+
+  # ==================== Redis 缓存 ====================
+  redis:
+    image: redis:7-alpine
+    container_name: saas-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # Redis 内存限制：超过后使用 LRU 策略淘汰旧数据
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    networks:
+      - saas-network
+
+  # ==================== Prometheus 监控 ====================
+  # Prometheus 是云原生监控的事实标准
+  # 它通过 Pull 模式定期从应用的 /metrics 端点拉取指标数据
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: saas-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../k8s/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'        # 只保留7天数据（节省磁盘）
+      - '--storage.tsdb.retention.size=1GB'        # 最多占用1GB磁盘
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    networks:
+      - saas-network
+
+  # ==================== Grafana 可视化 ====================
+  # Grafana 是最流行的监控可视化平台
+  # 它从 Prometheus 读取指标数据，展示成漂亮的仪表盘
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: saas-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../k8s/monitoring/grafana-datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    networks:
+      - saas-network
+
+# ==================== 持久化存储 ====================
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+# ==================== 网络 ====================
+networks:
+  saas-network:
+    driver: bridge

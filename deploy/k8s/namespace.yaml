@@ -1,0 +1,11 @@
+# Kubernetes Namespace（命名空间）
+# 云原生最佳实践：使用 Namespace 隔离不同的环境和服务
+# 类似于文件系统中的目录，不同 Namespace 中的资源互不影响
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: saas-shortener
+  labels:
+    app: saas-shortener
+    # 这些标签用于 Prometheus 服务发现
+    monitoring: enabled

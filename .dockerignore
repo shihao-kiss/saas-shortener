@@ -1,0 +1,9 @@
+# 排除不需要复制到 Docker 镜像中的文件
+.git
+.gitignore
+*.md
+bin/
+deploy/
+.vscode/
+.idea/
+*.test

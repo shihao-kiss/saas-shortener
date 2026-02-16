@@ -1,0 +1,12 @@
+# Grafana 数据源配置
+# 通过文件自动配置 Prometheus 数据源
+# Grafana 启动时会自动加载此配置
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090  # Docker Compose 中的服务名
+    isDefault: true
+    editable: true

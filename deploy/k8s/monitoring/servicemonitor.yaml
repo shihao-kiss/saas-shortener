@@ -1,0 +1,33 @@
+# Kubernetes ServiceMonitor（Prometheus Operator 专用）
+# 这是在 Kubernetes 生产环境中配置 Prometheus 采集目标的推荐方式
+#
+# 前提条件：集群中需要安装 Prometheus Operator
+# 安装方式：helm install prometheus prometheus-community/kube-prometheus-stack
+#
+# 工作原理：
+# 1. 你创建 ServiceMonitor 资源
+# 2. Prometheus Operator 监听到新的 ServiceMonitor
+# 3. Operator 自动更新 Prometheus 配置，添加新的采集目标
+# 4. Prometheus 开始从你的服务拉取指标
+#
+# 这比手动编辑 Prometheus 配置文件优雅得多（声明式 vs 命令式）
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: saas-shortener-monitor
+  namespace: saas-shortener
+  labels:
+    app: saas-shortener
+    # Prometheus Operator 通过这个标签发现 ServiceMonitor
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: saas-shortener  # 匹配 Service 的标签
+  endpoints:
+    - port: http            # 对应 Service 中定义的端口名
+      path: /metrics         # 指标采集路径
+      interval: 15s          # 采集间隔
+  namespaceSelector:
+    matchNames:
+      - saas-shortener       # 在哪个 Namespace 中寻找 Service

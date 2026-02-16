@@ -1,0 +1,109 @@
+# Kubernetes Deployment（部署）
+# 这是 K8s 中最常用的工作负载资源
+# 它管理 Pod 的创建、更新和扩缩容
+#
+# Deployment 的核心能力：
+# 1. 声明式更新 - 描述期望状态，K8s 自动达到
+# 2. 滚动更新 - 零停机发布新版本
+# 3. 回滚 - 发现问题可以快速回退
+# 4. 扩缩容 - 根据负载调整 Pod 数量
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saas-shortener
+  namespace: saas-shortener
+  labels:
+    app: saas-shortener
+    version: v1
+spec:
+  replicas: 2  # 初始副本数（生产环境配合 HPA 自动扩缩容）
+  selector:
+    matchLabels:
+      app: saas-shortener
+  
+  # 滚动更新策略
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # 更新时不允许有不可用的 Pod（零停机）
+      maxSurge: 1          # 更新时最多多创建 1 个 Pod
+  
+  template:
+    metadata:
+      labels:
+        app: saas-shortener
+        version: v1
+      annotations:
+        # Prometheus 自动发现注解
+        # Prometheus Operator 会根据这些注解自动采集指标
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # 优雅终止等待时间（与代码中的 ShutdownTimeout 对应）
+      terminationGracePeriodSeconds: 30
+      
+      containers:
+        - name: saas-shortener
+          image: saas-shortener:latest  # 替换为你的镜像仓库地址
+          imagePullPolicy: IfNotPresent
+          
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          
+          # ==================== 环境变量注入 ====================
+          # 从 ConfigMap 注入非敏感配置
+          envFrom:
+            - configMapRef:
+                name: saas-shortener-config
+            - secretRef:
+                name: saas-shortener-secret
+          
+          # ==================== 健康检查探针 ====================
+          # Liveness Probe（存活探针）
+          # 如果失败，Kubernetes 会重启容器
+          # 场景：应用陷入死锁或不可恢复的状态
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10   # 启动后等待 10 秒开始探测
+            periodSeconds: 15          # 每 15 秒探测一次
+            timeoutSeconds: 3          # 超时 3 秒
+            failureThreshold: 3        # 连续失败 3 次判定为不健康
+          
+          # Readiness Probe（就绪探针）
+          # 如果失败，Kubernetes 会将 Pod 从 Service 的端点列表中移除
+          # 场景：数据库连接断开、Redis 不可用等依赖服务异常
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5    # 启动后等待 5 秒开始探测
+            periodSeconds: 10          # 每 10 秒探测一次
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          # Startup Probe（启动探针，K8s 1.18+）
+          # 在启动探针成功之前，不会执行 Liveness 和 Readiness 探针
+          # 适合启动较慢的应用
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12      # 最多等待 60 秒（5s * 12）
+          
+          # ==================== 资源限制 ====================
+          # 云原生最佳实践：必须设置资源请求和限制
+          # requests: 调度时的最低保障资源
+          # limits: 最大可使用资源，超过会被 OOM Kill
+          resources:
+            requests:
+              cpu: "100m"       # 0.1 核 CPU
+              memory: "128Mi"   # 128MB 内存
+            limits:
+              cpu: "500m"       # 0.5 核 CPU
+              memory: "256Mi"   # 256MB 内存
