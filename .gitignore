@@ -15,7 +15,6 @@ coverage.html
 .idea/
 *.swp
 *.swo
-docs/
 
 # OS
 .DS_Store
