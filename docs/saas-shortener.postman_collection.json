@@ -1,0 +1,447 @@
+{
+  "info": {
+    "name": "SaaS 短链接服务",
+    "description": "云原生 SaaS 短链接服务 API 测试集合\n\n使用前请先配置环境变量：\n- base_url: http://localhost:8080 或 http://虚拟机IP:8080\n- api_key: 创建租户后返回的 API Key",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "short_code",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "基础设施",
+      "item": [
+        {
+          "name": "健康检查 (Liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/healthz",
+              "host": ["{{base_url}}"],
+              "path": ["healthz"]
+            },
+            "description": "Kubernetes Liveness Probe 端点\n判断服务是否存活"
+          }
+        },
+        {
+          "name": "就绪检查 (Readiness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/readyz",
+              "host": ["{{base_url}}"],
+              "path": ["readyz"]
+            },
+            "description": "Kubernetes Readiness Probe 端点\n检查数据库和 Redis 是否连通"
+          }
+        },
+        {
+          "name": "Prometheus 指标",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["metrics"]
+            },
+            "description": "Prometheus 指标采集端点\n返回所有自定义指标数据"
+          }
+        }
+      ]
+    },
+    {
+      "name": "租户管理",
+      "item": [
+        {
+          "name": "创建租户 (Free)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    pm.collectionVariables.set('api_key', data.api_key);",
+                  "    console.log('API Key 已自动保存: ' + data.api_key);",
+                  "}",
+                  "",
+                  "pm.test('状态码为 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('返回包含 api_key', function () {",
+                  "    var data = pm.response.json();",
+                  "    pm.expect(data).to.have.property('api_key');",
+                  "    pm.expect(data.api_key).to.be.a('string').and.not.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"test-company\",\n  \"plan\": \"free\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tenants"]
+            },
+            "description": "创建新租户（模拟客户注册）\n\n返回的 api_key 会自动保存到变量中，后续请求自动使用。\n\n套餐可选：free / pro / enterprise"
+          }
+        },
+        {
+          "name": "创建租户 (Pro)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    console.log('Pro 租户 API Key: ' + data.api_key);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"pro-company\",\n  \"plan\": \"pro\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tenants",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tenants"]
+            },
+            "description": "创建 Pro 套餐租户\n限流 500 次/分钟，最多 10000 条 URL"
+          }
+        }
+      ]
+    },
+    {
+      "name": "短链接管理",
+      "item": [
+        {
+          "name": "创建短链接 - GitHub",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    pm.collectionVariables.set('short_code', data.code);",
+                  "    console.log('短码已保存: ' + data.code);",
+                  "}",
+                  "",
+                  "pm.test('状态码为 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('返回包含 code', function () {",
+                  "    var data = pm.response.json();",
+                  "    pm.expect(data).to.have.property('code');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://github.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            },
+            "description": "创建短链接\n\n返回的 code 会自动保存，用于后续的重定向测试"
+          }
+        },
+        {
+          "name": "创建短链接 - Google",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://www.google.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            }
+          }
+        },
+        {
+          "name": "创建短链接 - 自定义短码",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://go.dev\",\n  \"custom_code\": \"golang\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            },
+            "description": "创建自定义短码的短链接\n短码为 golang，访问 /golang 即可跳转"
+          }
+        },
+        {
+          "name": "查看短链接列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls?page=1&page_size=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "page_size", "value": "20" }
+              ]
+            },
+            "description": "分页查看当前租户的所有短链接\n\n注意：只能看到自己租户的数据（多租户隔离）"
+          }
+        },
+        {
+          "name": "查看统计信息",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/stats",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "stats"]
+            },
+            "description": "查看当前租户的统计数据\n包括总 URL 数、活跃 URL 数、总点击数"
+          }
+        },
+        {
+          "name": "测试短链接重定向",
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/{{short_code}}",
+              "host": ["{{base_url}}"],
+              "path": ["{{short_code}}"]
+            },
+            "description": "测试短链接跳转\n\n⚠️ 已关闭自动重定向，会看到 302 状态码和 Location 头部\n短码来自之前创建短链接时自动保存的变量"
+          }
+        }
+      ]
+    },
+    {
+      "name": "错误场景测试",
+      "item": [
+        {
+          "name": "无 API Key 访问（应返回 401）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('状态码为 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            },
+            "description": "不带 API Key 访问受保护的接口\n应返回 401 Unauthorized"
+          }
+        },
+        {
+          "name": "错误的 API Key（应返回 401）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('状态码为 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "invalid-api-key-12345"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            },
+            "description": "使用无效 API Key\n应返回 401 Unauthorized"
+          }
+        },
+        {
+          "name": "访问不存在的短链接（应返回 404）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('状态码为 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/nonexistent123",
+              "host": ["{{base_url}}"],
+              "path": ["nonexistent123"]
+            },
+            "description": "访问不存在的短码\n应返回 404 Not Found"
+          }
+        },
+        {
+          "name": "缺少 URL 参数（应返回 400）",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('状态码为 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/urls",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "urls"]
+            },
+            "description": "提交空 URL\n应返回 400 Bad Request"
+          }
+        }
+      ]
+    }
+  ]
+}
