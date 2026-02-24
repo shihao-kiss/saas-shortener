@@ -23,7 +23,177 @@ https://www.bilibili.com/video/BV1BH4y1g7ad/?spm_id_from=333.337.search-card.all
 
 # Docker 容器化
 
-## docker-compose
+## Dockerfile
+
+### Dockerfile 的核心作用
+
+Dockerfile 是一个构建指令文件，用来自动化创建 Docker 镜像。它定义了如何一步步构建应用程序的运行环境。
+
+### 多阶段构建
+
+```
+第一阶段：编译构建
+↓
+第二阶段：运行时环境
+↓
+最终产物：精简的生产镜像
+```
+
+#### 第一阶段：Builder（编译阶段）
+
+```
+FROM golang:1.22-alpine AS builder
+
+基础镜像：包含 Go 编译器的完整开发环境
+目的：编译 Go 源代码为可执行二进制文件
+特点：镜像较大（几百MB），包含编译工具链
+```
+
+#### 第二阶段：Runtime（运行阶段）
+
+```
+FROM alpine:3.19
+
+基础镜像：最小化的 Alpine Linux
+目的：只运行编译好的二进制文件
+特点：镜像很小（几MB），只包含运行必需组件
+```
+
+### 关键优化技术
+
+```
+缓存优化
+
+# 先复制依赖文件
+COPY go.mod go.sum ./
+RUN go mod download
+# 再复制源码
+COPY . .
+
+好处：只有依赖变化时才重新下载，加快构建速度
+```
+
+```
+静态编译
+
+CGO_ENABLED=0 GOOS=linux go build
+
+好处：生成不依赖 C 库的静态二进制，可在最小镜像中运行
+```
+
+```
+安全加固
+
+# 创建非 root 用户
+RUN adduser -D -g '' appuser
+# 使用非 root 用户运行
+USER appuser
+
+好处：提高容器安全性，遵循最小权限原则
+```
+
+### 构建流程示意图
+
+```
+源代码 → 多阶段构建 → 生产镜像
+   ↓         ↓           ↓
+开发环境   编译阶段    运行时环境
+(大镜像)   (中间层)    (小镜像)
+ 800MB →  编译过程  →  15MB最终镜像
+```
+
+### 优势总结
+
+| 传统单阶段     | 多阶段构建      |
+| -------------- | --------------- |
+| 镜像大(500MB+) | 镜像小(15-20MB) |
+| 包含编译工具   | 只包含运行时    |
+| 安全风险高     | 安全性更好      |
+| 构建慢         | 利用缓存更快    |
+
+这种多阶段构建模式是现代云原生应用的标准做法，既保证了安全性又优化了性能。
+
+
+
+### 源码解析
+
+```
+# ==================== 多阶段构建（Multi-Stage Build） ====================
+# 云原生最佳实践：使用多阶段构建减小镜像体积
+# 第一阶段（builder）：编译 Go 程序
+# 第二阶段（runtime）：只包含编译后的二进制文件
+# 最终镜像大小通常只有 10-20MB（对比传统方式 几百MB）
+
+# ---------- 阶段1：编译 ----------
+FROM golang:1.22-alpine AS builder
+
+# 替换 Alpine 软件源为阿里云镜像（国内环境必须，否则下载超时）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 安装编译需要的工具
+RUN apk add --no-cache git ca-certificates
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置 Go 模块代理（国内环境加速依赖下载）
+ENV GOPROXY=https://goproxy.cn,direct
+
+# 先复制依赖文件，利用 Docker 层缓存
+# 只有 go.mod/go.sum 变化时才重新下载依赖
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 复制源代码
+COPY . .
+
+# 编译
+# CGO_ENABLED=0: 禁用 CGO，生成静态链接的二进制（不依赖 C 库）
+# -ldflags="-s -w": 去除调试信息，减小二进制体积
+RUN CGO_ENABLED=0 GOOS=linux go build \
+-ldflags="-s -w" \
+-o /app/server \
+./cmd/server
+
+# ---------- 阶段2：运行时 ----------
+# 使用最小基础镜像 scratch 或 distroless
+# scratch 是空镜像，distroless 包含基础运行时
+FROM alpine:3.19
+
+# 替换 Alpine 软件源为阿里云镜像
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 安装 CA 证书（HTTPS 请求需要）和时区数据
+RUN apk --no-cache add ca-certificates tzdata
+
+# 创建非 root 用户（安全最佳实践）
+RUN adduser -D -g '' appuser
+
+# 设置工作目录
+WORKDIR /app
+
+# 从 builder 阶段复制编译好的二进制
+COPY --from=builder /app/server .
+
+# 使用非 root 用户运行（安全最佳实践）
+USER appuser
+
+# 暴露端口（仅作文档用途，实际端口由运行时环境变量控制）
+EXPOSE 8080
+
+# 健康检查
+# Docker 原生健康检查，Kubernetes 中通常使用 Probe 替代
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
+
+# 启动命令
+ENTRYPOINT ["./server"]
+
+```
+
+
+
+## Docker-compose
 
 ### 网络
 
@@ -176,7 +346,7 @@ DNS 解析：通过服务名 postgres 自动解析
 
 
 
-### 停止 docker compose 环境
+### 停止 Docker compose 环境
 
 ```
 ## 停止 Docker Compose 环境
