@@ -21,6 +21,8 @@ https://www.bilibili.com/video/BV1BH4y1g7ad/?spm_id_from=333.337.search-card.all
 
 
 
+- k8s 学习：https://zhuanlan.zhihu.com/p/245208287
+
 
 
 
