@@ -85,3 +85,85 @@ Redis 服务器的可执行文件
 ```
 
 - RDB 快照文件、AOF 日志文件
+
+
+
+# 生产环境部署
+
+## 资源依赖关系图
+
+![image-20260225105428784](study.assets/image-20260225105428784.png)
+
+## 名词解释&关系
+
+| 名词            | 解释 |
+| --------------- | ---- |
+| Namespace       |      |
+| ConfigMap       |      |
+| Secret          |      |
+| Deployment      |      |
+| Service         |      |
+| Ingress         |      |
+| HPA             |      |
+| Label Selector  |      |
+| backend service |      |
+| Workload        |      |
+
+## 配置数据流
+
+![image-20260225110240196](study.assets/image-20260225110240196.png)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
