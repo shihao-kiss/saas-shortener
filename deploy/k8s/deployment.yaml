@@ -21,8 +21,12 @@ spec:
     matchLabels:
       app: saas-shortener
   
-
-
+  # 滚动更新策略
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # 更新时不允许有不可用的 Pod（零停机）
+      maxSurge: 1          # 更新时最多多创建 1 个 Pod
   
   template:
     metadata:
