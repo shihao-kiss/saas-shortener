@@ -157,7 +157,7 @@ main() {
     preflight_check
     cd "$PROJECT_ROOT"
 
-    fix_coredns_if_needed
+    # fix_coredns_if_needed （minikube 启动后 make k8s-deploy 修复）
 
     log_step 1 "创建 Namespace: $NAMESPACE"
     kubectl apply -f "$K8S_DIR/namespace.yaml"
