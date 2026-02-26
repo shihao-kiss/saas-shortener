@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
 # =============================================================================
 # saas-shortener K8S 一键安装脚本
-# 功能：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA
+# 功能：预拉取镜像 → 构建应用 → 部署基础设施 → 部署应用 → 启用 Ingress/HPA
 # 前置：minikube 已启动 (minikube start)，或已有可用的 K8S 集群
-# 用法：在项目根目录执行 make k8s-deploy 或 ./deploy/k8s/install.sh
+# 用法：make k8s-deploy 或 bash deploy/k8s/install.sh
 # =============================================================================
 
 set -e
 
-# 获取脚本所在目录和项目根目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 K8S_DIR="$SCRIPT_DIR"
 APP_NAME="saas-shortener"
 NAMESPACE="saas-shortener"
 
-# 颜色输出
+# 阿里云 K8S 镜像仓库（与 minikube --image-repository 一致）
+K8S_IMG_REPO="registry.cn-hangzhou.aliyuncs.com/google_containers"
+
+# 所有需要的第三方镜像（宿主机拉取 → minikube image load）
+IMAGES=(
+    "postgres:16-alpine"
+    "redis:7-alpine"
+    "${K8S_IMG_REPO}/nginx-ingress-controller:v1.10.0"
+    "${K8S_IMG_REPO}/kube-webhook-certgen:v1.4.0"
+)
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -25,7 +34,6 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
-# 检查命令是否存在
 check_command() {
     if ! command -v "$1" &>/dev/null; then
         log_error "$1 未安装，请先安装"
@@ -33,7 +41,6 @@ check_command() {
     fi
 }
 
-# 检查 kubectl 连接
 check_k8s() {
     if ! kubectl cluster-info &>/dev/null; then
         log_error "无法连接 K8S 集群，请确保 minikube 已启动: minikube start"
@@ -41,92 +48,105 @@ check_k8s() {
     fi
 }
 
-# 构建 Docker 镜像（Minikube 环境）
+is_minikube() {
+    command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1
+}
+
+# 使用宿主机 Docker 拉取所有镜像，再 load 到 Minikube
+# Minikube 内部 Docker 无镜像加速配置，直连 Docker Hub 会超时
+pre_pull_images() {
+    if ! is_minikube; then
+        return
+    fi
+
+    eval "$(minikube docker-env -u)"
+    log_info "========== 预拉取镜像（宿主机 Docker → Minikube） =========="
+
+    for image in "${IMAGES[@]}"; do
+        if docker image inspect "$image" &>/dev/null; then
+            log_info "已存在，跳过拉取: $image"
+        else
+            log_info "拉取: $image"
+            docker pull "$image"
+        fi
+        log_info "加载到 Minikube: $image"
+        minikube image load "$image"
+    done
+
+    log_info "========== 镜像预拉取完成 =========="
+}
+
+# 在 Minikube 内部构建应用镜像
 build_image() {
     log_info "构建应用镜像..."
-    if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
+    if is_minikube; then
         eval "$(minikube docker-env)"
-        log_info "使用 Minikube 内部 Docker 构建镜像"
+        log_info "使用 Minikube 内部 Docker 构建"
     fi
 
     cd "$PROJECT_ROOT"
     docker build -t ${APP_NAME}:latest -f deploy/docker/Dockerfile .
     log_info "镜像构建完成: ${APP_NAME}:latest"
-}
 
-# 预拉取 PostgreSQL 和 Redis 镜像并加载到 Minikube
-# 使用宿主机 Docker（已配置 registry-mirrors）拉取，再 load 到 Minikube
-# 原因：Minikube 内部 Docker/containerd 无镜像加速配置，直连 Docker Hub 会超时
-pre_pull_images() {
-    if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
-        log_info "使用宿主机 Docker 拉取 postgres、redis 镜像（走 registry-mirrors 加速）..."
-        docker pull postgres:16-alpine
-        docker pull redis:7-alpine
-        log_info "加载镜像到 Minikube..."
-        minikube image load postgres:16-alpine
-        minikube image load redis:7-alpine
-        log_info "镜像预拉取完成"
+    # 切回宿主机 Docker
+    if is_minikube; then
+        eval "$(minikube docker-env -u)"
     fi
 }
 
-# 部署 PostgreSQL 和 Redis
-deploy_infra() {
-    log_info "部署 PostgreSQL 和 Redis..."
-    kubectl apply -f "$K8S_DIR/infra/postgres.yaml"
-    kubectl apply -f "$K8S_DIR/infra/redis.yaml"
-}
-
-# 主流程
 main() {
     log_info "========== saas-shortener K8S 一键安装 =========="
 
     check_command kubectl
     check_command docker
     check_k8s
-
     cd "$PROJECT_ROOT"
 
     # 1. 创建 Namespace
-    log_info "创建 Namespace: $NAMESPACE"
+    log_info "[1/8] 创建 Namespace: $NAMESPACE"
     kubectl apply -f "$K8S_DIR/namespace.yaml"
 
-    # 2. 在 Minikube 内预拉取 postgres、redis 镜像（国内环境加速）
+    # 2. 预拉取所有第三方镜像
+    log_info "[2/8] 预拉取镜像"
     pre_pull_images
 
-    # 3. 构建镜像
+    # 3. 构建应用镜像
+    log_info "[3/8] 构建应用镜像"
     build_image
 
     # 4. 部署 PostgreSQL 和 Redis
-    deploy_infra
+    log_info "[4/8] 部署 PostgreSQL 和 Redis"
+    kubectl apply -f "$K8S_DIR/infra/postgres.yaml"
+    kubectl apply -f "$K8S_DIR/infra/redis.yaml"
 
-    # 5. 等待数据库就绪
-    log_info "等待 PostgreSQL 就绪..."
-    kubectl wait --for=condition=Ready pod/postgres -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
-    log_info "等待 Redis 就绪..."
-    kubectl wait --for=condition=Ready pod/redis -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+    # 5. 等待基础设施就绪
+    log_info "[5/8] 等待基础设施就绪"
+    kubectl wait --for=condition=Ready pod/postgres -n "$NAMESPACE" --timeout=120s
+    kubectl wait --for=condition=Ready pod/redis -n "$NAMESPACE" --timeout=60s
 
-    # 6. 应用 K8S 配置
-    log_info "应用 ConfigMap 和 Secret..."
+    # 6. 部署应用
+    log_info "[6/8] 部署应用"
     kubectl apply -f "$K8S_DIR/configmap.yaml"
     kubectl apply -f "$K8S_DIR/secret.yaml"
-
-    log_info "部署应用..."
     kubectl apply -f "$K8S_DIR/deployment.yaml"
     kubectl apply -f "$K8S_DIR/service.yaml"
 
-    # 7. 启用 Minikube 插件并应用 Ingress/HPA
-    if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
-        log_info "启用 Minikube Ingress 插件..."
-        minikube addons enable ingress 2>/dev/null || true
-        log_info "启用 Minikube metrics-server 插件..."
-        minikube addons enable metrics-server 2>/dev/null || true
-    fi
+    # 7. 启用 Ingress 和 HPA
+    log_info "[7/8] 启用 Ingress 和 HPA"
+    if is_minikube; then
+        minikube addons enable metrics-server 2>/dev/null || log_warn "metrics-server 启用失败"
+        minikube addons enable ingress 2>/dev/null || log_warn "Ingress 插件启用失败"
 
-    kubectl apply -f "$K8S_DIR/ingress.yaml"
-    kubectl apply -f "$K8S_DIR/hpa.yaml"
+        log_info "等待 Ingress Controller 就绪..."
+        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=controller \
+            -n ingress-nginx --timeout=180s 2>/dev/null \
+            || log_warn "Ingress Controller 未就绪，可稍后检查: kubectl get pods -n ingress-nginx"
+    fi
+    kubectl apply -f "$K8S_DIR/ingress.yaml" 2>/dev/null || log_warn "Ingress 配置跳过"
+    kubectl apply -f "$K8S_DIR/hpa.yaml" 2>/dev/null || log_warn "HPA 配置跳过"
 
     # 8. 等待应用就绪
-    log_info "等待应用 Pod 就绪..."
+    log_info "[8/8] 等待应用就绪"
     kubectl rollout status deployment/${APP_NAME} -n "$NAMESPACE" --timeout=120s
 
     log_info "========== 安装完成 =========="
