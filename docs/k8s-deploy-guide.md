@@ -132,7 +132,10 @@ sudo tee /etc/docker/daemon.json <<-'EOF'
   "registry-mirrors": [
     "https://docker.1ms.run",
     "https://docker.xuanyuan.me",
-    "https://docker.ketches.cn"
+    "https://docker.ketches.cn",
+    "docker.m.daocloud.io",
+    "dockerpull.org",
+    "https://slk30g05.mirror.aliyuncs.com"
   ],
   "dns": ["223.5.5.5", "114.114.114.114"],
   "log-driver": "json-file",

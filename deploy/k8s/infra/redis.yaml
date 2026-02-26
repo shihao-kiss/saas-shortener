@@ -10,7 +10,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: redis
-      image: redis:7-alpine
+      image: docker.m.daocloud.io/redis:7-alpine
       ports:
         - containerPort: 6379
 ---
