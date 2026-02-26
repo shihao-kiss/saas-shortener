@@ -11,7 +11,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: postgres
-      image: postgres:16-alpine
+      image: registry.cn-hangzhou.aliyuncs.com/dockerhub_library/postgres:16-alpine
       env:
         - name: POSTGRES_USER
           value: postgres

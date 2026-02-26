@@ -10,7 +10,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: redis
-      image: redis:7-alpine
+      image: registry.cn-hangzhou.aliyuncs.com/dockerhub_library/redis:7-alpine
       ports:
         - containerPort: 6379
 ---

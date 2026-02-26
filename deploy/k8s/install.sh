@@ -54,12 +54,12 @@ build_image() {
     log_info "镜像构建完成: ${APP_NAME}:latest"
 }
 
-# 在 Minikube 内预拉取 PostgreSQL 和 Redis 镜像（避免 K8s 创建 Pod 时拉取过慢）
+# 在 Minikube 内预拉取 PostgreSQL 和 Redis 镜像（使用阿里云镜像源，国内环境加速）
 pre_pull_images() {
     if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
-        log_info "在 Minikube 内预拉取 postgres、redis 镜像..."
-        minikube image pull postgres:16-alpine
-        minikube image pull redis:7-alpine
+        log_info "在 Minikube 内预拉取 postgres、redis 镜像（阿里云源）..."
+        minikube image pull registry.cn-hangzhou.aliyuncs.com/dockerhub_library/postgres:16-alpine
+        minikube image pull registry.cn-hangzhou.aliyuncs.com/dockerhub_library/redis:7-alpine
         log_info "镜像预拉取完成"
     fi
 }
