@@ -54,6 +54,16 @@ build_image() {
     log_info "镜像构建完成: ${APP_NAME}:latest"
 }
 
+# 在 Minikube 内预拉取 PostgreSQL 和 Redis 镜像（避免 K8s 创建 Pod 时拉取过慢）
+pre_pull_images() {
+    if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
+        log_info "在 Minikube 内预拉取 postgres、redis 镜像..."
+        minikube image pull postgres:16-alpine
+        minikube image pull redis:7-alpine
+        log_info "镜像预拉取完成"
+    fi
+}
+
 # 部署 PostgreSQL 和 Redis
 deploy_infra() {
     log_info "部署 PostgreSQL 和 Redis..."
@@ -75,19 +85,22 @@ main() {
     log_info "创建 Namespace: $NAMESPACE"
     kubectl apply -f "$K8S_DIR/namespace.yaml"
 
-    # 2. 构建镜像
+    # 2. 在 Minikube 内预拉取 postgres、redis 镜像（国内环境加速）
+    pre_pull_images
+
+    # 3. 构建镜像
     build_image
 
-    # 3. 部署 PostgreSQL 和 Redis
+    # 4. 部署 PostgreSQL 和 Redis
     deploy_infra
 
-    # 4. 等待数据库就绪
+    # 5. 等待数据库就绪
     log_info "等待 PostgreSQL 就绪..."
     kubectl wait --for=condition=Ready pod/postgres -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
     log_info "等待 Redis 就绪..."
     kubectl wait --for=condition=Ready pod/redis -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
 
-    # 5. 应用 K8S 配置
+    # 6. 应用 K8S 配置
     log_info "应用 ConfigMap 和 Secret..."
     kubectl apply -f "$K8S_DIR/configmap.yaml"
     kubectl apply -f "$K8S_DIR/secret.yaml"
@@ -96,7 +109,7 @@ main() {
     kubectl apply -f "$K8S_DIR/deployment.yaml"
     kubectl apply -f "$K8S_DIR/service.yaml"
 
-    # 6. 启用 Minikube 插件并应用 Ingress/HPA
+    # 7. 启用 Minikube 插件并应用 Ingress/HPA
     if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
         log_info "启用 Minikube Ingress 插件..."
         minikube addons enable ingress 2>/dev/null || true
@@ -107,7 +120,7 @@ main() {
     kubectl apply -f "$K8S_DIR/ingress.yaml"
     kubectl apply -f "$K8S_DIR/hpa.yaml"
 
-    # 7. 等待应用就绪
+    # 8. 等待应用就绪
     log_info "等待应用 Pod 就绪..."
     kubectl rollout status deployment/${APP_NAME} -n "$NAMESPACE" --timeout=120s
 
