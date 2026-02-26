@@ -88,12 +88,12 @@ test-api:
 ## 一键部署到 K8S/Minikube（含构建镜像、PostgreSQL、Redis、应用）
 .PHONY: k8s-deploy
 k8s-deploy:
-	./deploy/k8s/install.sh
+	bash deploy/k8s/install.sh
 
 ## 一键卸载（删除 saas-shortener 命名空间及所有资源）
 .PHONY: k8s-uninstall
 k8s-uninstall:
-	./deploy/k8s/uninstall.sh
+	bash deploy/k8s/uninstall.sh
 
 ## 仅应用 K8S 配置（适用于已有 PostgreSQL/Redis 的环境）
 .PHONY: k8s-apply
