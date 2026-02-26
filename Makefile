@@ -85,9 +85,19 @@ test-api:
 
 # ==================== Kubernetes ====================
 
-## 部署到 Kubernetes
+## 一键部署到 Minikube（含构建镜像、PostgreSQL、Redis、应用）
 .PHONY: k8s-deploy
 k8s-deploy:
+	./deploy/k8s-deploy.sh
+
+## 一键卸载（删除 saas-shortener 命名空间及所有资源）
+.PHONY: k8s-uninstall
+k8s-uninstall:
+	./deploy/k8s-uninstall.sh
+
+## 仅应用 K8S 配置（适用于已有 PostgreSQL/Redis 的环境）
+.PHONY: k8s-apply
+k8s-apply:
 	kubectl apply -f $(K8S_DIR)/namespace.yaml
 	kubectl apply -f $(K8S_DIR)/configmap.yaml
 	kubectl apply -f $(K8S_DIR)/secret.yaml
@@ -96,7 +106,7 @@ k8s-deploy:
 	kubectl apply -f $(K8S_DIR)/ingress.yaml
 	kubectl apply -f $(K8S_DIR)/hpa.yaml
 
-## 删除 Kubernetes 部署
+## 删除 K8S 配置（仅删除 YAML 定义的资源）
 .PHONY: k8s-delete
 k8s-delete:
 	kubectl delete -f $(K8S_DIR)/ --ignore-not-found
@@ -163,8 +173,10 @@ help:
 	@echo "  make test-api      - 运行 API 测试脚本"
 	@echo ""
 	@echo "Kubernetes:"
-	@echo "  make k8s-deploy    - 部署到 K8s"
-	@echo "  make k8s-delete    - 删除 K8s 部署"
+	@echo "  make k8s-deploy    - 一键部署到 Minikube（含镜像、数据库、应用）"
+	@echo "  make k8s-uninstall - 一键卸载（删除命名空间及所有资源）"
+	@echo "  make k8s-apply     - 仅应用 K8s 配置（已有数据库时用）"
+	@echo "  make k8s-delete    - 删除 K8s 配置"
 	@echo "  make k8s-status    - 查看 K8s 状态"
 	@echo ""
 	@echo "测试:"

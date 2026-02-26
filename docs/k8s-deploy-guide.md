@@ -605,71 +605,32 @@ minikube addons list
 
 ---
 
-## 九、完整部署一键脚本
+## 九、一键部署与卸载脚本
+
+项目已提供一键部署和一键卸载脚本，在项目根目录执行即可。
+
+### 9.1 一键部署
 
 ```bash
-#!/bin/bash
-# deploy.sh - 一键部署脚本
+# 前置：minikube 已启动 (minikube start)
+chmod +x deploy/k8s-deploy.sh
+./deploy/k8s-deploy.sh
+```
 
-set -e
+脚本将依次完成：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA。
 
-echo "=== 1. 切换到 Minikube Docker 环境 ==="
-eval $(minikube docker-env)
+### 9.2 一键卸载
 
-echo "=== 2. 构建应用镜像 ==="
-docker build -t saas-shortener:latest -f deploy/docker/Dockerfile .
+```bash
+chmod +x deploy/k8s-uninstall.sh
+./deploy/k8s-uninstall.sh
+```
 
-echo "=== 3. 创建 Namespace ==="
-kubectl apply -f deploy/k8s/namespace.yaml
+脚本会删除 `saas-shortener` 命名空间及其下所有资源（应用、数据库、Redis、配置等）。卸载前会要求确认。
 
-echo "=== 4. 部署 PostgreSQL ==="
-kubectl -n saas-shortener run postgres \
-  --image=postgres:16-alpine \
-  --env="POSTGRES_USER=postgres" \
-  --env="POSTGRES_PASSWORD=postgres" \
-  --env="POSTGRES_DB=saas_shortener" \
-  --port=5432 \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n saas-shortener expose pod postgres \
-  --name=postgres-service --port=5432 --target-port=5432 \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-echo "=== 5. 部署 Redis ==="
-kubectl -n saas-shortener run redis \
-  --image=redis:7-alpine --port=6379 \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n saas-shortener expose pod redis \
-  --name=redis-service --port=6379 --target-port=6379 \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-echo "=== 6. 等待数据库就绪 ==="
-kubectl wait --for=condition=Ready pod/postgres -n saas-shortener --timeout=60s
-kubectl wait --for=condition=Ready pod/redis -n saas-shortener --timeout=60s
-
-echo "=== 7. 部署应用 ==="
-kubectl apply -f deploy/k8s/configmap.yaml
-kubectl apply -f deploy/k8s/secret.yaml
-kubectl apply -f deploy/k8s/deployment.yaml
-kubectl apply -f deploy/k8s/service.yaml
-
-echo "=== 8. 启用插件 ==="
-minikube addons enable ingress 2>/dev/null || true
-minikube addons enable metrics-server 2>/dev/null || true
-kubectl apply -f deploy/k8s/ingress.yaml
-kubectl apply -f deploy/k8s/hpa.yaml
-
-echo "=== 9. 等待应用就绪 ==="
-kubectl wait --for=condition=Ready pods -l app=saas-shortener \
-  -n saas-shortener --timeout=120s
-
-echo ""
-echo "=== 部署完成！==="
-echo ""
-kubectl get all -n saas-shortener
-echo ""
-echo "访问方式："
-echo "  kubectl port-forward svc/saas-shortener-service 8080:80 -n saas-shortener"
-echo "  然后访问: http://localhost:8080/healthz"
+**免确认强制卸载：**
+```bash
+K8S_UNINSTALL_FORCE=1 ./deploy/k8s-uninstall.sh
 ```
 
 ---

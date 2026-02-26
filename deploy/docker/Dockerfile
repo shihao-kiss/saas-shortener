@@ -4,8 +4,12 @@
 # 第二阶段（runtime）：只包含编译后的二进制文件
 # 最终镜像大小通常只有 10-20MB（对比传统方式 几百MB）
 
+# 镜像仓库前缀，构建时可通过 --build-arg DOCKER_REGISTRY=xxx 覆盖
+# 国内: docker.m.daocloud.io / dockerpull.org  海外/已配置镜像加速: docker.io/library
+ARG DOCKER_REGISTRY=docker.m.daocloud.io
+
 # ---------- 阶段1：编译 ----------
-FROM golang:1.22-alpine AS builder
+FROM ${DOCKER_REGISTRY}/golang:1.22-alpine AS builder
 
 # 替换 Alpine 软件源为阿里云镜像（国内环境必须，否则下载超时）
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
@@ -38,7 +42,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # ---------- 阶段2：运行时 ----------
 # 使用最小基础镜像 scratch 或 distroless
 # scratch 是空镜像，distroless 包含基础运行时
-FROM alpine:3.19
+FROM ${DOCKER_REGISTRY}/alpine:3.19
 
 # 替换 Alpine 软件源为阿里云镜像
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
