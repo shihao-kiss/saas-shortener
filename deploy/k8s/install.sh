@@ -50,7 +50,20 @@ build_image() {
     fi
 
     cd "$PROJECT_ROOT"
-    docker build -t ${APP_NAME}:latest -f deploy/docker/Dockerfile .
+
+    # BuildKit 不继承 Docker daemon 的代理配置，需要通过 --build-arg 传入
+    local build_args=""
+    if [[ -n "${HTTP_PROXY:-}" ]]; then
+        build_args="$build_args --build-arg HTTP_PROXY=$HTTP_PROXY"
+    fi
+    if [[ -n "${HTTPS_PROXY:-}" ]]; then
+        build_args="$build_args --build-arg HTTPS_PROXY=$HTTPS_PROXY"
+    fi
+    if [[ -n "${NO_PROXY:-}" ]]; then
+        build_args="$build_args --build-arg NO_PROXY=$NO_PROXY"
+    fi
+
+    docker build $build_args -t ${APP_NAME}:latest -f deploy/docker/Dockerfile .
     log_info "镜像构建完成: ${APP_NAME}:latest"
 
     if is_minikube; then
