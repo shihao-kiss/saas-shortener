@@ -355,35 +355,27 @@ CoreDNS 启动 → 绑定 :53 → permission denied → 崩溃
 
 **解决方案**
 
-给 CoreDNS 添加 `NET_BIND_SERVICE` 能力：
+需要同时修改多个安全策略字段，使用 JSON patch 精确替换（strategic merge 对数组和布尔值可能不生效）：
 
 ```bash
-kubectl -n kube-system patch deployment coredns --type='strategic' -p='{
-  "spec": {
-    "template": {
-      "spec": {
-        "containers": [{
-          "name": "coredns",
-          "securityContext": {
-            "allowPrivilegeEscalation": true,
-            "capabilities": {
-              "add": ["NET_BIND_SERVICE"],
-              "drop": []
-            }
-          }
-        }]
-      }
-    }
-  }
-}'
+# 1. 修复 capabilities 和权限
+kubectl -n kube-system patch deployment coredns --type='json' -p='[
+  {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/allowPrivilegeEscalation", "value": true},
+  {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/capabilities/drop", "value": []},
+  {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsUser", "value": 0},
+  {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsNonRoot", "value": false}
+]'
 
-# 等待重启
+# 2. 等待重启
+kubectl rollout restart deployment/coredns -n kube-system
 kubectl rollout status deployment/coredns -n kube-system --timeout=60s
 
-# 验证
+# 3. 验证
 kubectl get pods -n kube-system | grep coredns
 # 应显示 1/1 Running
 ```
+
+> **注意**：仅添加 `NET_BIND_SERVICE` 能力不够，还需要 `runAsUser: 0`（以 root 运行）和清除 `drop: ["ALL"]`。原始 securityContext 中 `drop: ALL` 会覆盖 `add`，且非 root 用户即使有该能力也可能因内核限制无法绑定特权端口。
 
 修复 CoreDNS 后，重启应用：
 

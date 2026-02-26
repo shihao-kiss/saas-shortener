@@ -68,17 +68,19 @@ fix_coredns_if_needed() {
 
     [[ "$running_count" -gt 0 ]] && return 0
 
-    log_warn "CoreDNS 未就绪，尝试修复（添加 NET_BIND_SERVICE 能力）..."
-    kubectl -n kube-system patch deployment coredns --type='strategic' -p '{
-      "spec": {"template": {"spec": {"containers": [{
-        "name": "coredns",
-        "securityContext": {
-          "allowPrivilegeEscalation": true,
-          "capabilities": {"add": ["NET_BIND_SERVICE"], "drop": []}
-        }
-      }]}}}
-    }' 2>/dev/null || true
+    log_warn "CoreDNS 未就绪，尝试修复..."
 
+    # 使用 JSON patch 精确替换（strategic merge 对数组字段和布尔值可能不生效）
+    # 1. 允许特权提升 + 添加 NET_BIND_SERVICE 能力 + 清空 drop 列表
+    # 2. 以 root 用户运行（非 root 用户即使有 NET_BIND_SERVICE 也可能无法绑定 53 端口）
+    kubectl -n kube-system patch deployment coredns --type='json' -p='[
+      {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/allowPrivilegeEscalation", "value": true},
+      {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/capabilities/drop", "value": []},
+      {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsUser", "value": 0},
+      {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsNonRoot", "value": false}
+    ]' 2>/dev/null || true
+
+    kubectl rollout restart deployment/coredns -n kube-system 2>/dev/null || true
     kubectl rollout status deployment/coredns -n kube-system --timeout=60s 2>/dev/null \
         || log_warn "CoreDNS 未就绪，可能影响 DNS 解析"
 }
