@@ -137,6 +137,31 @@ main() {
         minikube addons enable metrics-server 2>/dev/null || log_warn "metrics-server 启用失败"
         minikube addons enable ingress 2>/dev/null || log_warn "Ingress 插件启用失败"
 
+        # Minikube Ingress 插件会给镜像加 @sha256 摘要引用，强制从远程拉取验证
+        # 本地已有镜像时会因网络问题失败，去掉摘要后可直接使用本地镜像
+        # Minikube 启用 Ingress 插件时，会给镜像引用追加 @sha256:xxxx 摘要
+        # 例如: kube-webhook-certgen:v1.4.0@sha256:44d1d0e9...
+        # 这会强制从远程仓库拉取验证摘要，即使本地已有镜像也会失败（国内网络问题）
+        # 解决方案：导出资源 JSON → 去掉 @sha256 摘要 → 删除旧资源 → 重新创建
+        log_info "修复 Ingress 镜像摘要引用..."
+        # 等待 Ingress 插件资源创建完毕
+        sleep 3
+        # 遍历 job（admission-create/patch）和 deployment（controller）两种资源
+        for resource in job deployment; do
+            # 检查该类型资源是否存在
+            if kubectl get "$resource" -n ingress-nginx -o name &>/dev/null 2>&1; then
+                # 导出资源 JSON，用 sed 去掉所有 @sha256:xxx 摘要引用
+                kubectl get "$resource" -n ingress-nginx -o json | \
+                    sed 's/@sha256:[a-f0-9]*//g' > /tmp/ingress-${resource}.json
+                # 强制删除旧资源（Job 不可变，必须删除重建）
+                kubectl delete "$resource" --all -n ingress-nginx --force --grace-period=0 2>/dev/null || true
+                # 用去掉摘要的 JSON 重新创建资源，此时会使用本地已有的镜像
+                kubectl apply -f /tmp/ingress-${resource}.json 2>/dev/null || true
+                # 清理临时文件
+                rm -f /tmp/ingress-${resource}.json
+            fi
+        done
+
         log_info "等待 Ingress Controller 就绪..."
         kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=controller \
             -n ingress-nginx --timeout=180s 2>/dev/null \
