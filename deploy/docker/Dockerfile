@@ -5,8 +5,8 @@
 # 最终镜像大小通常只有 10-20MB（对比传统方式 几百MB）
 
 # 镜像仓库前缀，构建时可通过 --build-arg DOCKER_REGISTRY=xxx 覆盖
-# 国内: docker.m.daocloud.io / dockerpull.org  海外/已配置镜像加速: docker.io/library
-ARG DOCKER_REGISTRY=docker.m.daocloud.io
+# 默认使用 Docker Hub，无代理时可改为: docker.m.daocloud.io / dockerpull.org
+ARG DOCKER_REGISTRY=docker.io/library
 
 # ---------- 阶段1：编译 ----------
 FROM ${DOCKER_REGISTRY}/golang:1.22-alpine AS builder
