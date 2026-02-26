@@ -8,10 +8,11 @@ metadata:
   labels:
     app: postgres
 spec:
-  restartPolicy: Never
+  restartPolicy: Always
   containers:
     - name: postgres
       image: postgres:16-alpine
+      imagePullPolicy: IfNotPresent
       env:
         - name: POSTGRES_USER
           value: postgres
