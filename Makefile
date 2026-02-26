@@ -85,15 +85,15 @@ test-api:
 
 # ==================== Kubernetes ====================
 
-## 一键部署到 Minikube（含构建镜像、PostgreSQL、Redis、应用）
+## 一键部署到 K8S/Minikube（含构建镜像、PostgreSQL、Redis、应用）
 .PHONY: k8s-deploy
 k8s-deploy:
-	./deploy/k8s-deploy.sh
+	./deploy/k8s/install.sh
 
 ## 一键卸载（删除 saas-shortener 命名空间及所有资源）
 .PHONY: k8s-uninstall
 k8s-uninstall:
-	./deploy/k8s-uninstall.sh
+	./deploy/k8s/uninstall.sh
 
 ## 仅应用 K8S 配置（适用于已有 PostgreSQL/Redis 的环境）
 .PHONY: k8s-apply
@@ -106,10 +106,16 @@ k8s-apply:
 	kubectl apply -f $(K8S_DIR)/ingress.yaml
 	kubectl apply -f $(K8S_DIR)/hpa.yaml
 
-## 删除 K8S 配置（仅删除 YAML 定义的资源）
+## 删除 K8S 配置（仅删除 YAML 定义的资源，不含 namespace）
 .PHONY: k8s-delete
 k8s-delete:
-	kubectl delete -f $(K8S_DIR)/ --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/infra/ --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/configmap.yaml --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/secret.yaml --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/deployment.yaml --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/service.yaml --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/ingress.yaml --ignore-not-found
+	kubectl delete -f $(K8S_DIR)/hpa.yaml --ignore-not-found
 
 ## 查看 Kubernetes 资源状态
 .PHONY: k8s-status

@@ -613,8 +613,10 @@ minikube addons list
 
 ```bash
 # 前置：minikube 已启动 (minikube start)
-chmod +x deploy/k8s-deploy.sh
-./deploy/k8s-deploy.sh
+make k8s-deploy
+# 或
+chmod +x deploy/k8s/install.sh
+./deploy/k8s/install.sh
 ```
 
 脚本将依次完成：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA。
@@ -622,15 +624,17 @@ chmod +x deploy/k8s-deploy.sh
 ### 9.2 一键卸载
 
 ```bash
-chmod +x deploy/k8s-uninstall.sh
-./deploy/k8s-uninstall.sh
+make k8s-uninstall
+# 或
+chmod +x deploy/k8s/uninstall.sh
+./deploy/k8s/uninstall.sh
 ```
 
 脚本会删除 `saas-shortener` 命名空间及其下所有资源（应用、数据库、Redis、配置等）。卸载前会要求确认。
 
 **免确认强制卸载：**
 ```bash
-K8S_UNINSTALL_FORCE=1 ./deploy/k8s-uninstall.sh
+K8S_UNINSTALL_FORCE=1 ./deploy/k8s/uninstall.sh
 ```
 
 ---

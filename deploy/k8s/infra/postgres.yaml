@@ -1,0 +1,35 @@
+# PostgreSQL 数据库（开发/测试环境）
+# 生产环境建议使用 StatefulSet + PVC 或云数据库
+apiVersion: v1
+kind: Pod
+metadata:
+  name: postgres
+  namespace: saas-shortener
+  labels:
+    app: postgres
+spec:
+  restartPolicy: Never
+  containers:
+    - name: postgres
+      image: postgres:16-alpine
+      env:
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          value: postgres
+        - name: POSTGRES_DB
+          value: saas_shortener
+      ports:
+        - containerPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: saas-shortener
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
