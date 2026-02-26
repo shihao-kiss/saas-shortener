@@ -17,13 +17,13 @@
 | **kubeadm** | 多节点 | ⭐⭐⭐ 较难 | 每节点 ~2GB | 正式生产环境 |
 | **Kind** | 单节点 | ⭐ 简单 | ~2GB 内存 | CI/CD 测试 |
 
-> 你的虚拟机是 4C8G 单台，Minikube 最合适。如果以后想模拟多节点生产环境，可以再学 kubeadm。
+> 虚拟机是 4C8G 单台，Minikube 最合适。如果以后想模拟多节点生产环境，可以用 kubeadm。
 
 ---
 
 ## 一、前置准备
 
-### 1.1 确认 Docker 已安装
+### 确认 Docker 已安装
 
 Minikube 需要容器运行时，你的虚拟机上应该已经有 Docker：
 
@@ -35,17 +35,44 @@ docker --version
 如果没有，先安装 Docker：
 
 ```bash
-# 安装 Docker
-curl -fsSL https://get.docker.com | sh
-
-# 启动并设置开机自启
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# 将当前用户加入 docker 组（免 sudo）
-sudo usermod -aG docker $USER
-newgrp docker
+请参考：https://blog.shpym.cn/index.php/archives/83/
 ```
+
+### 配置 Docker 镜像加速（关键！影响后续所有镜像拉取速度）
+
+Minikube 启动时要拉取大量 K8S 组件镜像（kube-apiserver、etcd、coredns 等），不配加速会非常慢甚至超时。
+
+```bash
+# 配置 Docker 镜像加速器
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me",
+    "https://docker.ketches.cn",
+    "docker.m.daocloud.io",
+    "dockerpull.org",
+    "https://slk30g05.mirror.aliyuncs.com"
+  ],
+  "dns": ["223.5.5.5", "114.114.114.114"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+
+# 重启 Docker 使配置生效
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 验证加速器是否生效
+docker info | grep -A 5 "Registry Mirrors"
+```
+
+> ⚠️ 镜像加速器地址可能失效，如遇到拉取超时，搜索"docker 镜像加速 2026"获取最新可用地址。
 
 ### 1.2 关闭 swap（K8S 要求）
 
@@ -118,48 +145,12 @@ sudo mv minikube-linux-amd64 /usr/local/bin/minikube
 
 # 验证
 minikube version
-```
 
-### 3.2 配置 Docker 镜像加速（关键！影响后续所有镜像拉取速度）
 
-Minikube 启动时要拉取大量 K8S 组件镜像（kube-apiserver、etcd、coredns 等），不配加速会非常慢甚至超时。
 
-```bash
-# 配置 Docker 镜像加速器
-sudo mkdir -p /etc/docker
-sudo tee /etc/docker/daemon.json <<-'EOF'
-{
-  "registry-mirrors": [
-    "https://docker.1ms.run",
-    "https://docker.xuanyuan.me",
-    "https://docker.ketches.cn",
-    "docker.m.daocloud.io",
-    "dockerpull.org",
-    "https://slk30g05.mirror.aliyuncs.com"
-  ],
-  "dns": ["223.5.5.5", "114.114.114.114"],
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
 
-# 重启 Docker 使配置生效
-sudo systemctl daemon-reload
-sudo systemctl restart docker
 
-# 验证加速器是否生效
-docker info | grep -A 5 "Registry Mirrors"
-```
 
-> ⚠️ 镜像加速器地址可能失效，如遇到拉取超时，搜索"docker 镜像加速 2026"获取最新可用地址。
-
-### 3.3 启动 Minikube 集群
-
-```bash
-# 使用 Docker 驱动 + 阿里云 K8S 镜像源启动
 # 1. 从 Docker Hub 拉取 kicbase 基础镜像
 docker pull kicbase/stable:v0.0.43
 
@@ -168,6 +159,21 @@ docker tag kicbase/stable:v0.0.43 gcr.io/k8s-minikube/kicbase:v0.0.43
 
 # 3. 确认镜像已就位
 docker images | grep kicbase
+
+```
+
+### 3.3 启动 Minikube 集群
+
+```bash
+
+
+
+
+
+
+
+
+
 
 
 ---------------------------
@@ -215,20 +221,109 @@ minikube start \
 # --force                         允许以 root 用户运行（虚拟机学习环境需要）
 ```
 
-> ⚠️ `--force` 是因为 Minikube 默认不允许 root 用户使用 docker 驱动。学习环境直接加 `--force` 即可。生产环境建议创建普通用户运行。
 
-> 配合阿里云镜像仓库后，首次启动通常 **3-5 分钟**即可完成（不加速可能 30 分钟甚至失败）。
 
-### 提速效果对比
+### 3.4 配置代理访问 Docker Hub
 
-| 步骤 | 不加速 | 加速后 |
-|------|--------|--------|
-| 下载 kubectl | 10-30 分钟或超时 | **几秒** |
-| 下载 Minikube | 10-30 分钟或超时 | **几秒** |
-| `minikube start` 拉取镜像 | 30+ 分钟或失败 | **3-5 分钟** |
-| 后续 `docker pull` | 龟速 | 正常速度 |
+如果 Docker 镜像加速器不稳定，或需要拉取 Docker Hub 官方镜像（如 Ingress Controller），可通过代理方案一次性解决所有镜像拉取问题。
 
-### 3.3 验证集群状态
+#### 为什么需要代理
+
+Minikube 运行在 Docker 容器中，内部有独立的 Docker daemon。即使宿主机 Docker 配了镜像加速，Minikube 内部的 Docker 并不继承这些配置。配置代理后，Minikube 内部可直接拉取 Docker Hub 镜像，无需预拉取或使用镜像站。
+
+#### 方案：SSH 反向隧道 + Minikube 代理
+
+适用场景：Windows 主机上有 Clash 等代理工具，需要将代理能力"穿透"到 Linux 虚拟机及其中的 Minikube。
+
+**第一步：修改虚拟机 SSH 配置**
+
+```bash
+# 启用 GatewayPorts，允许非 127.0.0.1 地址访问转发的端口
+sed -i 's/#*GatewayPorts.*/GatewayPorts yes/' /etc/ssh/sshd_config
+systemctl restart sshd
+```
+
+**第二步：从 Windows 建立反向隧道**
+
+```powershell
+# 将虚拟机的 7897 端口转发到 Windows 本机的 Clash 代理端口
+ssh -R 0.0.0.0:7897:127.0.0.1:7897 root@192.168.3.200
+```
+
+**第三步：获取 Minikube 容器的网关 IP**
+
+```bash
+# Minikube 容器看到的宿主机 IP（不是 172.17.0.1！）
+minikube ssh -- ip route show default
+# 输出示例: default via 192.168.49.1 dev eth0
+```
+
+> **注意**：Minikube 使用独立网络（`192.168.49.0/24`），网关不是 Docker 默认网桥的 `172.17.0.1`。
+
+**第四步：验证代理连通性**
+
+```bash
+ss -tlnp | grep 7897                                     # 确认隧道在监听
+curl -x http://192.168.49.1:7897 https://www.google.com  # 测试代理可用
+```
+
+
+
+### 启动 Minikube 集群
+
+如果已有集群需要先删除再重建：
+
+```bash
+minikube delete
+
+minikube start \
+  --driver=docker \
+  --cpus=2 \
+  --memory=4096 \
+  --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers \
+  --kubernetes-version=v1.29.15 \
+  --force \
+  --docker-env=HTTP_PROXY=http://192.168.49.1:7897 \
+  --docker-env=HTTPS_PROXY=http://192.168.49.1:7897 \
+  --docker-env=NO_PROXY=localhost,127.0.0.1,10.96.0.0/12,192.168.0.0/16
+  
+# 参数说明：
+# --driver=docker                 使用 Docker 作为运行时（不需要 VirtualBox）
+# --cpus=2                        分配 2 核 CPU
+# --memory=4096                   分配 4GB 内存
+# --image-mirror-country=cn       使用国内镜像加速
+# --image-repository=registry...  指定阿里云 K8S 镜像仓库（核心提速参数！）
+# --kubernetes-version=v1.29.0    指定版本，避免拉取 latest 时反复查询
+# --force                         允许以 root 用户运行（虚拟机学习环境需要）
+
+# `--force` 是因为 Minikube 默认不允许 root 用户使用 docker 驱动。学习环境直接加 `--force` 即可。生产环境建议创建普通用户运行。
+```
+
+| 参数                       | 作用                                             |
+| -------------------------- | ------------------------------------------------ |
+| `--docker-env=HTTP_PROXY`  | 设置 Minikube 内部 Docker daemon 的 HTTP 代理    |
+| `--docker-env=HTTPS_PROXY` | 设置 HTTPS 代理（值仍用 `http://`，指代理协议）  |
+| `--docker-env=NO_PROXY`    | 排除集群内部网段，避免 Pod 间通信走代理          |
+| `--image-repository`       | K8s 组件镜像使用阿里云源（与代理无关，加速启动） |
+
+#### 注意事项
+
+**HTTPS_PROXY 的值为什么是 `http://` 而不是 `https://`？**
+
+`HTTPS_PROXY` 中的 "HTTPS" 指要代理的**目标流量**是 HTTPS，而不是代理服务器本身使用 HTTPS 协议。Clash 的代理端口是普通 HTTP 代理，所以用 `http://`。
+
+**SSH 隧道断开怎么办？**
+
+隧道会在 SSH 连接断开时失效。如果 `docker pull` 突然报 `connection refused`：
+
+```bash
+ss -tlnp | grep 7897  # 检查隧道是否还在
+# 没有输出 → 在 Windows 重建隧道
+```
+
+
+
+### 3.5 验证集群状态
 
 ```bash
 # 查看集群状态
@@ -255,105 +350,7 @@ kubectl get pods -n kube-system
 
 ---
 
-## 四、构建应用镜像
-
-Minikube 有自己的 Docker 环境，需要把镜像构建到 Minikube 内部：
-
-```bash
-# 将当前 shell 的 Docker 指向 Minikube 内部的 Docker
-eval $(minikube docker-env)
-
-# 确认已切换（注意看 DOCKER_HOST）
-docker info | grep "Name:"
-
-# 在项目根目录构建镜像
-cd /path/to/saas-shortener
-docker build -t saas-shortener:latest -f deploy/docker/Dockerfile .
-
-# 验证镜像已构建
-docker images | grep saas-shortener
-```
-
-> ⚠️ 每次打开新终端都需要重新执行 `eval $(minikube docker-env)`，否则镜像会构建到宿主机 Docker 中，Minikube 内找不到。
-
----
-
-## 五、部署前准备 — 数据库和 Redis
-
-K8S 配置文件中 `DB_HOST=postgres-service`、`REDIS_ADDR=redis-service:6379`，说明需要在集群内部署 PostgreSQL 和 Redis。
-
-### 5.1 快速部署 PostgreSQL
-
-```bash
-# 创建命名空间（先执行，后面所有资源都在这个 Namespace 下）
-kubectl apply -f deploy/k8s/namespace.yaml
-
-# 部署 PostgreSQL
-kubectl -n saas-shortener run postgres \
-  --image=postgres:16-alpine \
-  --env="POSTGRES_USER=postgres" \
-  --env="POSTGRES_PASSWORD=postgres" \
-  --env="POSTGRES_DB=saas_shortener" \
-  --port=5432
-
-# 为 PostgreSQL 创建 Service
-kubectl -n saas-shortener expose pod postgres \
-  --name=postgres-service \
-  --port=5432 \
-  --target-port=5432
-
-# 验证
-kubectl get pods,svc -n saas-shortener
-```
-
-### 5.2 快速部署 Redis
-
-```bash
-# 部署 Redis
-kubectl -n saas-shortener run redis \
-  --image=redis:7-alpine \
-  --port=6379
-
-# 为 Redis 创建 Service
-kubectl -n saas-shortener expose pod redis \
-  --name=redis-service \
-  --port=6379 \
-  --target-port=6379
-
-# 验证
-kubectl get pods,svc -n saas-shortener
-```
-
----
-
-## 六、部署应用服务
-
-### 6.1 按顺序应用 K8S 配置
-
-```bash
-# 1. 命名空间（已在上一步创建）
-kubectl apply -f deploy/k8s/namespace.yaml
-
-# 2. 配置和密钥
-kubectl apply -f deploy/k8s/configmap.yaml
-kubectl apply -f deploy/k8s/secret.yaml
-
-# 3. 部署应用
-kubectl apply -f deploy/k8s/deployment.yaml
-
-# 4. 创建 Service
-kubectl apply -f deploy/k8s/service.yaml
-
-# 5. 创建 Ingress（可选，Minikube 需要先启用插件）
-minikube addons enable ingress
-kubectl apply -f deploy/k8s/ingress.yaml
-
-# 6. 自动扩缩容（可选，需要先启用 metrics-server）
-minikube addons enable metrics-server
-kubectl apply -f deploy/k8s/hpa.yaml
-```
-
-### 6.2 验证部署状态
+### 验证部署状态
 
 ```bash
 # 查看所有资源
@@ -407,112 +404,45 @@ curl -X POST http://localhost:8080/api/v1/tenants \
 
 ## 七、K8S 可视化面板
 
-K8S 有多种可视化工具可以查看 Pod、Namespace、Service 等资源：
+###  Lens（桌面客户端）
 
-### 7.1 Kubernetes Dashboard（官方）
+如果你想在 **Windows 主机**上远程管理虚拟机中的 K8S，Lens 是最佳选择。
 
-这是 K8S 官方提供的 Web UI，Minikube 内置支持：
+**安装与连接步骤：**
 
-```bash
-# 一键启用并打开 Dashboard
-minikube dashboard
+1. 在 Windows 上下载安装 Lens：https://k8slens.dev/
+2. 从虚拟机复制 kubeconfig：
+
+```powershell
+scp root@<虚拟机IP>:~/.kube/config C:\Users\你的用户名\.kube\minikube-config
 ```
 
-这会自动打开浏览器，你可以看到：
+3. 建立 SSH 隧道（Minikube API Server 只监听容器内部，需要转发）：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│              Kubernetes Dashboard                        │
-│                                                         │
-│  左侧菜单：                                              │
-│  ├── Cluster                                            │
-│  │   ├── Namespaces          ← 查看所有命名空间           │
-│  │   └── Nodes               ← 查看节点状态              │
-│  ├── Workloads                                          │
-│  │   ├── Deployments         ← 查看部署                  │
-│  │   ├── Pods                ← 查看所有 Pod 状态          │
-│  │   └── Replica Sets        ← 查看副本集                │
-│  ├── Service                                            │
-│  │   ├── Services            ← 查看 Service              │
-│  │   └── Ingresses           ← 查看 Ingress              │
-│  └── Config                                             │
-│      ├── Config Maps         ← 查看 ConfigMap            │
-│      └── Secrets             ← 查看 Secret               │
-│                                                         │
-│  功能：查看日志、进入容器终端、编辑 YAML、扩缩容等          │
-└─────────────────────────────────────────────────────────┘
+```powershell
+# 先查看 Minikube 容器实际暴露的端口（在 Linux 上执行）
+# docker port minikube
+# 输出示例: 8443/tcp -> 0.0.0.0:32769
+
+# Windows 上建立隧道（端口号替换为上面查到的实际端口）
+ssh -L 8443:127.0.0.1:32769 root@<虚拟机IP> -N
 ```
 
-> 如果用 SSH 远程连接虚拟机，Dashboard 无法直接打开浏览器，需要用代理方式：
-> ```bash
-> # 启动 Dashboard（后台运行）
-> minikube dashboard --url &
-> # 输出类似：http://127.0.0.1:43210/api/v1/namespaces/kubernetes-dashboard/...
->
-> # 用 kubectl proxy 使其可远程访问
-> kubectl proxy --address='0.0.0.0' --accept-hosts='.*'
-> # 然后在 Windows 浏览器访问：
-> # http://<虚拟机IP>:8001/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/
-> ```
+> 如果 `docker port minikube` 显示 `8443/tcp -> 0.0.0.0:8443`，则隧道命令为：
+> `ssh -L 8443:127.0.0.1:8443 root@<虚拟机IP> -N`
 
-### 7.2 K9s（终端 UI，强烈推荐）
+4. kubeconfig 中 `server` 保持 `https://127.0.0.1:8443` 不变
+5. 打开 Lens → File → Add Cluster → 选择或粘贴 kubeconfig 文件
 
-K9s 是一个**终端内的 K8S 管理界面**，不需要浏览器，SSH 连上就能用，非常适合虚拟机环境：
+**如果遇到证书错误**，在 kubeconfig 的 cluster 中添加：
 
-```bash
-# 安装 K9s
-curl -sS https://webinstall.dev/k9s | bash
-
-# 或手动下载
-curl -LO https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_amd64.tar.gz
-tar -xzf k9s_Linux_amd64.tar.gz
-sudo mv k9s /usr/local/bin/
-
-# 启动
-k9s
-```
-
-K9s 界面：
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ K9s - Kubernetes CLI Dashboard                              │
-│                                                             │
-│ Context: minikube    Cluster: minikube    Namespace: all     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  NAMESPACE          NAME                    READY  STATUS   │
-│  saas-shortener     saas-shortener-abc123   1/1    Running  │
-│  saas-shortener     saas-shortener-def456   1/1    Running  │
-│  saas-shortener     postgres                1/1    Running  │
-│  saas-shortener     redis                   1/1    Running  │
-│  kube-system        coredns-xxx             1/1    Running  │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│ 快捷键:                                                     │
-│  :pod      查看 Pod          :svc     查看 Service           │
-│  :deploy   查看 Deployment   :ns      查看 Namespace         │
-│  :hpa      查看 HPA          :ing     查看 Ingress           │
-│  l         查看日志           s        进入容器 Shell          │
-│  d         描述资源           e        编辑 YAML              │
-│  ctrl+d    删除资源           /        搜索过滤               │
-│  :q        退出                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-> K9s 是运维利器——纯键盘操作，比 Dashboard 快得多，强烈推荐日常使用。
-
-### 7.3 Lens（桌面客户端）
-
-如果你想在 **Windows 主机**上远程管理虚拟机中的 K8S，Lens 是最佳选择：
-
-```
-安装步骤：
-1. 在 Windows 上下载 Lens：https://k8slens.dev/
-2. 从虚拟机复制 kubeconfig 文件：
-   scp root@<虚拟机IP>:~/.kube/config C:\Users\你的用户名\.kube\config
-3. 修改 config 中的 server 地址为虚拟机 IP
-4. 打开 Lens，自动检测集群
+```yaml
+clusters:
+- cluster:
+    certificate-authority-data: LS0tLS1C...
+    insecure-skip-tls-verify: true    # 跳过证书验证（仅开发环境）
+    server: https://127.0.0.1:8443
+  name: minikube
 ```
 
 Lens 功能：
@@ -522,14 +452,6 @@ Lens 功能：
 - 一键进入容器终端
 - 资源使用率监控（CPU、内存图表）
 - 多集群管理
-
-### 7.4 三种工具对比
-
-| 工具 | 类型 | 安装位置 | 适合场景 |
-|------|------|---------|---------|
-| **Dashboard** | Web UI | 集群内 | 浏览器操作，简单直观 |
-| **K9s** | 终端 UI | 虚拟机上 | **SSH 远程管理，日常运维推荐** |
-| **Lens** | 桌面客户端 | Windows 主机上 | 图形化远程管理，功能最全 |
 
 ---
 
@@ -617,9 +539,6 @@ minikube addons list
 ```bash
 # 前置：minikube 已启动 (minikube start)
 make k8s-deploy
-# 或
-chmod +x deploy/k8s/install.sh
-./deploy/k8s/install.sh
 ```
 
 脚本将依次完成：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA。
@@ -628,9 +547,6 @@ chmod +x deploy/k8s/install.sh
 
 ```bash
 make k8s-uninstall
-# 或
-chmod +x deploy/k8s/uninstall.sh
-./deploy/k8s/uninstall.sh
 ```
 
 脚本会删除 `saas-shortener` 命名空间及其下所有资源（应用、数据库、Redis、配置等）。卸载前会要求确认。
@@ -640,57 +556,11 @@ chmod +x deploy/k8s/uninstall.sh
 K8S_UNINSTALL_FORCE=1 ./deploy/k8s/uninstall.sh
 ```
 
----
 
-## 常见问题
 
-### Q1: Pod 一直处于 ImagePullBackOff 状态
 
-```bash
-# 原因：Minikube 内找不到镜像
-# 解决：确保在 Minikube Docker 环境中构建镜像
-eval $(minikube docker-env)
-docker build -t saas-shortener:latest -f deploy/docker/Dockerfile .
 
-# 确认 Deployment 中 imagePullPolicy 是 IfNotPresent（不是 Always）
-```
 
-### Q2: Pod 一直处于 CrashLoopBackOff 状态
 
-```bash
-# 查看日志找原因
-kubectl logs <pod-name> -n saas-shortener
 
-# 常见原因：数据库连不上
-# 检查 PostgreSQL 和 Redis 是否 Running
-kubectl get pods -n saas-shortener
-```
 
-### Q3: Minikube start 失败
-
-```bash
-# 清理后重试
-minikube delete
-minikube start --driver=docker --cpus=2 --memory=4096 --image-mirror-country=cn
-```
-
-### Q4: kubectl 命令返回 "connection refused"
-
-```bash
-# Minikube 可能没有启动
-minikube status
-
-# 如果 stopped，重新启动
-minikube start
-```
-
-### Q5: Dashboard 远程访问不了
-
-```bash
-# 使用 kubectl proxy 暴露
-kubectl proxy --address='0.0.0.0' --accept-hosts='.*' &
-
-# 确保虚拟机防火墙放行 8001 端口
-sudo firewall-cmd --add-port=8001/tcp --permanent
-sudo firewall-cmd --reload
-```
