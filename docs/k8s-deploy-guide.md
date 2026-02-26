@@ -166,7 +166,7 @@ docker images | grep kicbase
 
 > **版本号说明**：`v0.0.43` 对应 Minikube `v1.33.0`。不同 Minikube 版本需要不同的 kicbase 版本，可通过 `minikube start --dry-run` 或查看 [Minikube Release Notes](https://github.com/kubernetes/minikube/releases) 确认。
 
-### 3.3 预缓存 K8S 二进制文件（可选）
+### 3.3 预缓存 K8S 二进制文件
 
 `minikube start` 会自动下载 kubeadm、kubelet、kubectl 二进制文件。如果使用了 `--image-mirror-country=cn`，可能因为阿里云 OSS 上缺少对应版本的 sha256 校验文件而报 404 错误。
 
@@ -270,6 +270,8 @@ curl -x http://192.168.49.1:7897 https://www.google.com  # 测试代理可用
 
 如果已有集群需要先删除再重建：
 
+![image-20260226174420014](k8s-deploy-guide.assets/image-20260226174420014.png)
+
 ```bash
 minikube delete
 
@@ -277,7 +279,6 @@ minikube start \
   --driver=docker \
   --cpus=2 \
   --memory=4096 \
-  --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers \
   --kubernetes-version=v1.29.15 \
   --force \
   --base-image=gcr.io/k8s-minikube/kicbase:v0.0.43 \
@@ -291,13 +292,12 @@ minikube start \
 | `--docker-env=HTTP_PROXY` | 设置 Minikube 内部 Docker daemon 的 HTTP 代理 |
 | `--docker-env=HTTPS_PROXY` | 设置 HTTPS 代理（值仍用 `http://`，指代理协议） |
 | `--docker-env=NO_PROXY` | 排除集群内部网段，避免 Pod 间通信走代理 |
-| `--image-repository` | K8s 组件镜像使用阿里云源（与代理无关，加速启动） |
 
 #### 注意事项
 
 **HTTPS_PROXY 的值为什么是 `http://` 而不是 `https://`？**
 
-`HTTPS_PROXY` 中的 "HTTPS" 指要代理的**目标流量**是 HTTPS，而不是代理服务器本身使用 HTTPS 协议。Clash 的代理端口是普通 HTTP 代理，所以用 `http://`。
+`HTTPS_PROXY` 中的 "HTTPS" 指要代理的**目标流量**是 HTTPS，而不是代理服务器本身使用 HTTPS 协议。
 
 **SSH 隧道断开怎么办？**
 
@@ -346,88 +346,84 @@ kubectl get nodes
 kubectl get pods -n kube-system
 ```
 
+#### CoreDNS 崩溃导致 DNS 解析失败
+
+**现象**
+
+应用 Pod 持续 `CrashLoopBackOff`，日志显示数据库连接失败：
+
+检查 CoreDNS 发现也在崩溃：
+
+```bash
+kubectl get pods -n kube-system | grep coredns
+# coredns-xxx   0/1   CrashLoopBackOff
+
+kubectl logs -l k8s-app=kube-dns -n kube-system
+# Listen: listen tcp :53: bind: permission denied
+```
+
+**根因**
+
+CoreDNS 新版本以非 root 用户运行，缺少 `NET_BIND_SERVICE` Linux 能力，无法绑定 53 端口（特权端口 < 1024）。这是 K8s v1.29+ 的已知兼容性问题。
+
+```
+CoreDNS 启动 → 绑定 :53 → permission denied → 崩溃
+  ↓
+集群 DNS 不可用 → Pod 无法解析 Service 域名 → 应用连不上数据库 → CrashLoopBackOff
+```
+
+**解决方案**
+
+需要同时修改多个安全策略字段，使用 JSON patch 精确替换（strategic merge 对数组和布尔值可能不生效）：
+
+```bash
+# 1. 修复 capabilities 和权限
+kubectl -n kube-system patch deployment coredns --type='json' -p='[
+  {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/allowPrivilegeEscalation", "value": true},
+  {"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/capabilities/drop", "value": []},
+  {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsUser", "value": 0},
+  {"op": "add", "path": "/spec/template/spec/containers/0/securityContext/runAsNonRoot", "value": false}
+]'
+
+# 2. 等待重启
+kubectl rollout restart deployment/coredns -n kube-system
+kubectl rollout status deployment/coredns -n kube-system --timeout=60s
+
+# 3. 验证
+kubectl get pods -n kube-system | grep coredns
+# 应显示 1/1 Running
+```
+
+> **注意**：仅添加 `NET_BIND_SERVICE` 能力不够，还需要 `runAsUser: 0`（以 root 运行）和清除 `drop: ["ALL"]`。原始 securityContext 中 `drop: ALL` 会覆盖 `add`，且非 root 用户即使有该能力也可能因内核限制无法绑定特权端口。
+
+修复 CoreDNS 后，重启应用：
+
+```bash
+kubectl rollout restart deployment/saas-shortener -n saas-shortener
+```
+
+![image-20260226175734803](k8s-deploy-guide.assets/image-20260226175734803.png)
+
 ---
 
-## 四、构建应用镜像
+## 四、部署应用
 
-Minikube 有自己的 Docker 环境，需要把镜像构建到 Minikube 内部：
+![image-20260226181811686](k8s-deploy-guide.assets/image-20260226181811686.png)
 
-```bash
-# 将当前 shell 的 Docker 指向 Minikube 内部的 Docker
-eval $(minikube docker-env)
+![image-20260226184251600](k8s-deploy-guide.assets/image-20260226184251600.png)
 
-# 确认已切换（注意看 DOCKER_HOST）
-docker info | grep "Name:"
-
-# 在项目根目录构建镜像
-cd /path/to/saas-shortener
-docker build -t saas-shortener:latest -f deploy/docker/Dockerfile .
-
-# 验证镜像已构建
-docker images | grep saas-shortener
+```
+Kubernetes:
+  make k8s-deploy    - 一键部署到 Minikube（含镜像、数据库、应用）
+  make k8s-uninstall - 一键卸载（删除命名空间及所有资源）
+  make k8s-apply     - 仅应用 K8s 配置（已有数据库时用）
+  make k8s-delete    - 删除 K8s 配置
+  make k8s-status    - 查看 K8s 状态
 ```
 
-> 每次打开新终端都需要重新执行 `eval $(minikube docker-env)`，否则镜像会构建到宿主机 Docker 中，Minikube 内找不到。
 
----
 
-## 五、部署前准备 — 数据库和 Redis
-
-K8S 配置文件中 `DB_HOST=postgres-service`、`REDIS_ADDR=redis-service:6379`，说明需要在集群内部署 PostgreSQL 和 Redis。
-
-### 5.1 快速部署 PostgreSQL
-
-```bash
-# 创建命名空间（先执行，后面所有资源都在这个 Namespace 下）
-kubectl apply -f deploy/k8s/namespace.yaml
-
-# 部署 PostgreSQL
-kubectl apply -f deploy/k8s/infra/postgres.yaml
-
-# 验证
-kubectl get pods,svc -n saas-shortener
-```
-
-### 5.2 快速部署 Redis
-
-```bash
-# 部署 Redis
-kubectl apply -f deploy/k8s/infra/redis.yaml
-
-# 验证
-kubectl get pods,svc -n saas-shortener
-```
-
----
-
-## 六、部署应用服务
-
-### 6.1 按顺序应用 K8S 配置
-
-```bash
-# 1. 命名空间（已在上一步创建）
-kubectl apply -f deploy/k8s/namespace.yaml
-
-# 2. 配置和密钥
-kubectl apply -f deploy/k8s/configmap.yaml
-kubectl apply -f deploy/k8s/secret.yaml
-
-# 3. 部署应用
-kubectl apply -f deploy/k8s/deployment.yaml
-
-# 4. 创建 Service
-kubectl apply -f deploy/k8s/service.yaml
-
-# 5. 创建 Ingress（可选，Minikube 需要先启用插件）
-minikube addons enable ingress
-kubectl apply -f deploy/k8s/ingress.yaml
-
-# 6. 自动扩缩容（可选，需要先启用 metrics-server）
-minikube addons enable metrics-server
-kubectl apply -f deploy/k8s/hpa.yaml
-```
-
-### 6.2 验证部署状态
+### 4.1 验证部署状态
 
 ```bash
 # 查看所有资源
@@ -450,97 +446,25 @@ kubectl logs -f deployment/saas-shortener -n saas-shortener
 kubectl describe pod <pod-name> -n saas-shortener
 ```
 
-### 6.3 访问服务
+### 4.2 测试 API
 
-```bash
-# 方式1：通过 minikube service 直接打开（最简单）
-minikube service saas-shortener-service -n saas-shortener
+部署成功了，但 K8S 集群内的服务不会自动暴露到宿主机端口。需要手动建立端口转发才能访问
 
-# 方式2：端口转发到本地（推荐调试用）
-kubectl port-forward svc/saas-shortener-service 8080:80 -n saas-shortener
-# 然后访问 http://localhost:8080
+![image-20260226185237484](k8s-deploy-guide.assets/image-20260226185237484.png)
 
-# 方式3：通过 Ingress 访问（需要配置 hosts）
-echo "$(minikube ip) shortener.example.com" | sudo tee -a /etc/hosts
-# 然后访问 http://shortener.example.com
 ```
+# 方式1：端口转发（推荐）
+kubectl port-forward svc/saas-shortener-service 8080:80 -n saas-shortener --address=0.0.0.0 &
 
-### 6.4 测试 API
-
-```bash
-# 健康检查
-curl http://localhost:8080/healthz
-
-# 创建租户
-curl -X POST http://localhost:8080/api/v1/tenants \
-  -H "Content-Type: application/json" \
-  -d '{"name": "test-company", "email": "test@example.com", "plan": "free"}'
+# 然后在虚拟机上访问：curl http://localhost:8080
+# 或从 Windows 访问：http://192.168.3.200:8080
 ```
 
 ---
 
-## 七、K8S 可视化面板
+## 五、K8S 可视化面板
 
-K8S 有多种可视化工具可以查看 Pod、Namespace、Service 等资源：
-
-### 7.1 Kubernetes Dashboard（官方）
-
-这是 K8S 官方提供的 Web UI，Minikube 内置支持：
-
-```bash
-# 一键启用并打开 Dashboard
-minikube dashboard
-```
-
-> 如果用 SSH 远程连接虚拟机，Dashboard 无法直接打开浏览器，需要用代理方式：
->
-> ```bash
-> # 启动 Dashboard（后台运行）
-> minikube dashboard --url &
-> # 输出类似：http://127.0.0.1:43210/api/v1/namespaces/kubernetes-dashboard/...
->
-> # 用 kubectl proxy 使其可远程访问
-> kubectl proxy --address='0.0.0.0' --accept-hosts='.*'
-> # 然后在 Windows 浏览器访问：
-> # http://<虚拟机IP>:8001/api/v1/namespaces/kubernetes-dashboard/services/http:kubernetes-dashboard:/proxy/
-> ```
-
-### 7.2 K9s（终端 UI，强烈推荐）
-
-K9s 是一个**终端内的 K8S 管理界面**，不需要浏览器，SSH 连上就能用，非常适合虚拟机环境：
-
-```bash
-# 安装 K9s
-curl -sS https://webinstall.dev/k9s | bash
-
-# 或手动下载
-curl -LO https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_amd64.tar.gz
-tar -xzf k9s_Linux_amd64.tar.gz
-sudo mv k9s /usr/local/bin/
-
-# 启动
-k9s
-```
-
-常用快捷键：
-
-| 快捷键 | 作用 |
-|--------|------|
-| `:pod` | 查看 Pod |
-| `:svc` | 查看 Service |
-| `:deploy` | 查看 Deployment |
-| `:ns` | 查看 Namespace |
-| `l` | 查看日志 |
-| `s` | 进入容器 Shell |
-| `d` | 描述资源 |
-| `e` | 编辑 YAML |
-| `ctrl+d` | 删除资源 |
-| `/` | 搜索过滤 |
-| `:q` | 退出 |
-
-> K9s 是运维利器——纯键盘操作，比 Dashboard 快得多，强烈推荐日常使用。
-
-### 7.3 Lens（桌面客户端）
+###  Lens（桌面客户端）
 
 如果你想在 **Windows 主机**上远程管理虚拟机中的 K8S，Lens 是最佳选择。
 
@@ -589,19 +513,11 @@ Lens 功能：
 - 资源使用率监控（CPU、内存图表）
 - 多集群管理
 
-### 7.4 三种工具对比
-
-| 工具 | 类型 | 安装位置 | 适合场景 |
-|------|------|---------|---------|
-| **Dashboard** | Web UI | 集群内 | 浏览器操作，简单直观 |
-| **K9s** | 终端 UI | 虚拟机上 | **SSH 远程管理，日常运维推荐** |
-| **Lens** | 桌面客户端 | Windows 主机上 | 图形化远程管理，功能最全 |
-
 ---
 
-## 八、常用运维操作
+## 六、常用运维操作
 
-### 8.1 更新应用版本
+### 6.1 更新应用版本
 
 ```bash
 # 1. 重新构建镜像
@@ -617,7 +533,7 @@ kubectl set image deployment/saas-shortener \
 kubectl rollout status deployment/saas-shortener -n saas-shortener
 ```
 
-### 8.2 回滚
+### 6.2 回滚
 
 ```bash
 # 回滚到上一个版本
@@ -627,7 +543,7 @@ kubectl rollout undo deployment/saas-shortener -n saas-shortener
 kubectl rollout history deployment/saas-shortener -n saas-shortener
 ```
 
-### 8.3 扩缩容
+### 6.3 扩缩容
 
 ```bash
 # 手动扩容到 4 个 Pod
@@ -637,7 +553,7 @@ kubectl scale deployment/saas-shortener --replicas=4 -n saas-shortener
 kubectl get hpa -n saas-shortener
 ```
 
-### 8.4 查看日志和调试
+### 6.4 查看日志和调试
 
 ```bash
 # 查看 Pod 日志
@@ -653,7 +569,7 @@ kubectl describe pod <pod-name> -n saas-shortener
 kubectl get events -n saas-shortener --sort-by='.lastTimestamp'
 ```
 
-### 8.5 Minikube 管理
+### 6.5 Minikube 管理
 
 ```bash
 # 停止集群（保留数据）
@@ -674,11 +590,11 @@ minikube addons list
 
 ---
 
-## 九、一键部署与卸载脚本
+## 七、一键部署与卸载脚本
 
 项目已提供一键部署和一键卸载脚本，在项目根目录执行即可。
 
-### 9.1 一键部署
+### 7.1 一键部署
 
 ```bash
 # 前置：minikube 已启动 (minikube start)
@@ -687,7 +603,7 @@ make k8s-deploy
 
 脚本将依次完成：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA。
 
-### 9.2 一键卸载
+### 7.2 一键卸载
 
 ```bash
 make k8s-uninstall
