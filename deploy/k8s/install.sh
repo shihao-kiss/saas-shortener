@@ -62,15 +62,26 @@ pre_pull_images() {
     eval "$(minikube docker-env -u)"
     log_info "========== 预拉取镜像（宿主机 Docker → Minikube） =========="
 
+    # 获取 Minikube 中已有的镜像列表（一次查询，避免重复调用）
+    local minikube_images
+    minikube_images=$(minikube image ls 2>/dev/null)
+
     for image in "${IMAGES[@]}"; do
+        # 检查宿主机是否已有该镜像
         if docker image inspect "$image" &>/dev/null; then
-            log_info "已存在，跳过拉取: $image"
+            log_info "宿主机已存在，跳过拉取: $image"
         else
             log_info "拉取: $image"
             docker pull "$image"
         fi
-        log_info "加载到 Minikube: $image"
-        minikube image load "$image"
+
+        # 检查 Minikube 中是否已有该镜像
+        if echo "$minikube_images" | grep -q "$image"; then
+            log_info "Minikube 已存在，跳过加载: $image"
+        else
+            log_info "加载到 Minikube: $image"
+            minikube image load "$image"
+        fi
     done
 
     log_info "========== 镜像预拉取完成 =========="
