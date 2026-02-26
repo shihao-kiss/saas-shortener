@@ -51,19 +51,13 @@ build_image() {
 
     cd "$PROJECT_ROOT"
 
-    # BuildKit 不继承 Docker daemon 的代理配置，需要通过 --build-arg 传入
-    local build_args=""
-    if [[ -n "${HTTP_PROXY:-}" ]]; then
-        build_args="$build_args --build-arg HTTP_PROXY=$HTTP_PROXY"
-    fi
-    if [[ -n "${HTTPS_PROXY:-}" ]]; then
-        build_args="$build_args --build-arg HTTPS_PROXY=$HTTPS_PROXY"
-    fi
-    if [[ -n "${NO_PROXY:-}" ]]; then
-        build_args="$build_args --build-arg NO_PROXY=$NO_PROXY"
-    fi
+    # BuildKit 的 FROM 镜像解析不走 Docker daemon 代理，也不受 --build-arg 影响
+    # 预拉取基础镜像，让 BuildKit 直接使用本地缓存
+    log_info "预拉取 Dockerfile 基础镜像..."
+    docker pull golang:1.22-alpine
+    docker pull alpine:3.19
 
-    docker build $build_args -t ${APP_NAME}:latest -f deploy/docker/Dockerfile .
+    docker build -t ${APP_NAME}:latest -f deploy/docker/Dockerfile .
     log_info "镜像构建完成: ${APP_NAME}:latest"
 
     if is_minikube; then
