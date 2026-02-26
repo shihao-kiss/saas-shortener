@@ -10,7 +10,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: redis
-      image: docker.1ms.run/redis:7-alpine
+      image: redis:7-alpine
       ports:
         - containerPort: 6379
 ---

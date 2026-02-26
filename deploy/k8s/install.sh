@@ -54,12 +54,17 @@ build_image() {
     log_info "镜像构建完成: ${APP_NAME}:latest"
 }
 
-# 在 Minikube 内预拉取 PostgreSQL 和 Redis 镜像（使用 docker.1ms.run 国内镜像源）
+# 预拉取 PostgreSQL 和 Redis 镜像并加载到 Minikube
+# 使用宿主机 Docker（已配置 registry-mirrors）拉取，再 load 到 Minikube
+# 原因：Minikube 内部 Docker/containerd 无镜像加速配置，直连 Docker Hub 会超时
 pre_pull_images() {
     if command -v minikube &>/dev/null && minikube status &>/dev/null 2>&1; then
-        log_info "在 Minikube 内预拉取 postgres、redis 镜像（docker.1ms.run）..."
-        minikube image pull docker.1ms.run/postgres:16-alpine
-        minikube image pull docker.1ms.run/redis:7-alpine
+        log_info "使用宿主机 Docker 拉取 postgres、redis 镜像（走 registry-mirrors 加速）..."
+        docker pull postgres:16-alpine
+        docker pull redis:7-alpine
+        log_info "加载镜像到 Minikube..."
+        minikube image load postgres:16-alpine
+        minikube image load redis:7-alpine
         log_info "镜像预拉取完成"
     fi
 }
