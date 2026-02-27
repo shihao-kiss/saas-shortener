@@ -21,7 +21,12 @@
   - [3.3 Minikube 启动时配置代理](#33-minikube-启动时配置代理)
   - [3.4 代理相关的注意事项](#34-代理相关的注意事项)
 - [四、Namespace 卡在 Terminating](#四namespace-卡在-terminating)
-- [五、常用排查命令速查](#五常用排查命令速查)
+- [五、Windows Lens 连接 Minikube 失败](#五windows-lens-连接-minikube-失败)
+  - [5.1 unable to read client-cert（文件路径问题）](#51-unable-to-read-client-cert文件路径问题)
+  - [5.2 channel: open failed（端口不对）](#52-channel-open-failed-connect-refused端口不对)
+  - [5.3 Invalid credentials（证书数据问题）](#53-invalid-credentials证书数据问题)
+  - [5.4 certificate has expired or is not yet valid](#54-certificate-has-expired-or-is-not-yet-valid)
+- [六、常用排查命令速查](#六常用排查命令速查)
 
 ---
 
@@ -517,7 +522,111 @@ kubectl get namespace saas-shortener
 
 ---
 
-## 五、常用排查命令速查
+## 五、Windows Lens 连接 Minikube 失败
+
+### 5.1 unable to read client-cert（文件路径问题）
+
+**现象**
+
+```
+unable to read client-cert /root/.minikube/profiles/minikube/client.crt
+unable to read client-key /root/.minikube/profiles/minikube/client.key
+unable to read certificate-authority /root/.minikube/ca.crt
+```
+
+**原因**
+
+直接从 Linux 复制 `~/.kube/config`，里面引用的是 Linux 本地文件路径（`client-certificate: /root/.minikube/...`），Windows 上不存在这些路径。
+
+**解决方案**
+
+使用 `--flatten` 导出，将证书内容以 base64 内嵌到 kubeconfig 中：
+
+```bash
+# Linux 上执行
+kubectl config view --flatten > /tmp/kubeconfig-export.yaml
+
+# Windows 上拷贝
+scp root@<虚拟机IP>:/tmp/kubeconfig-export.yaml C:\Users\你的用户名\.kube\minikube-config
+```
+
+导出后 kubeconfig 会使用 `client-certificate-data`（内嵌）替代 `client-certificate`（文件路径）。
+
+### 5.2 channel: open failed: connect refused（端口不对）
+
+**现象**
+
+```
+channel 2: open failed: connect failed: Connection refused
+```
+
+**原因**
+
+Minikube 使用 Docker 驱动时，API Server 的 8443 端口会映射到宿主机的**随机端口**，而非直接监听 `127.0.0.1:8443`。
+
+**解决方案**
+
+```bash
+# 查看实际映射端口
+docker port minikube
+# 输出示例: 8443/tcp -> 127.0.0.1:32779
+
+# SSH 隧道使用实际端口
+ssh -L 8443:127.0.0.1:32779 root@<虚拟机IP> -N
+```
+
+### 5.3 Invalid credentials（证书数据问题）
+
+**现象**
+
+Lens 日志显示 `Invalid credentials` 或 `failed to initialize kubeconfig`。
+
+**可能原因**
+
+1. 手动粘贴 kubeconfig 时证书 base64 数据被截断
+2. 虚拟机系统时间不对，证书验证失败
+
+**解决方案**
+
+```bash
+# 用 scp 复制完整文件，不要手动粘贴
+scp root@<虚拟机IP>:/tmp/kubeconfig-export.yaml C:\Users\你的用户名\.kube\minikube-config
+
+# 检查虚拟机系统时间
+date
+# 如果时间不对：
+sudo date -s "2026-02-27 10:00:00"
+sudo hwclock --systohc
+```
+
+### 5.4 certificate has expired or is not yet valid
+
+**现象**
+
+```
+x509: certificate has expired or is not yet valid:
+current time 2026-02-15T17:16:52Z is before 2026-02-19T20:57:44Z
+```
+
+**原因**
+
+虚拟机系统时间偏差，TLS 证书验证失败。同时会导致 `make` 报 `modification time in the future` 警告。
+
+**解决方案**
+
+```bash
+# 校正时间
+sudo date -s "2026-02-27 10:00:00"
+sudo hwclock --systohc
+
+# 安装 NTP 防止时间漂移
+sudo yum install -y chrony
+sudo systemctl enable --now chronyd
+```
+
+---
+
+## 六、常用排查命令速查
 
 ```bash
 # ===== 状态查看 =====

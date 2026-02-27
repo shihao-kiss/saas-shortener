@@ -51,9 +51,8 @@ sudo tee /etc/docker/daemon.json <<-'EOF'
     "https://docker.1ms.run",
     "https://docker.xuanyuan.me",
     "https://docker.ketches.cn",
-    "docker.m.daocloud.io",
-    "dockerpull.org",
-    "https://slk30g05.mirror.aliyuncs.com"
+    "https://docker.m.daocloud.io",
+    "https://dockerpull.org"
   ],
   "dns": ["223.5.5.5", "114.114.114.114"],
   "log-driver": "json-file",
@@ -133,11 +132,8 @@ kubectl version --client
 **使用国内镜像下载（推荐）：**
 
 ```bash
-# 方式1：通过 npmmirror（阿里前端镜像站，速度快）
+# 方式：通过 npmmirror（阿里前端镜像站，速度快）
 curl -LO https://registry.npmmirror.com/-/binary/minikube/v1.33.0/minikube-linux-amd64
-
-# 方式2：通过 GitHub 代理加速
-curl -LO https://ghfast.top/https://github.com/kubernetes/minikube/releases/download/v1.33.0/minikube-linux-amd64
 
 # 安装
 chmod +x minikube-linux-amd64
@@ -230,6 +226,44 @@ Minikube 运行在 Docker 容器中，内部有独立的 Docker daemon。即使�
 
 适用场景：Windows 主机上有 Clash 等代理工具，需要将代理能力"穿透"到 Linux 虚拟机及其中的 Minikube。
 
+**原理说明**
+
+代理（Clash）跑在 Windows 上，但需要拉镜像的是 Linux 虚拟机里的 Minikube 容器。中间隔着两层网络，需要用 SSH **反向**隧道让 Linux 能借用 Windows 的代理：
+
+```
+┌──────── Windows 主机 ────────┐
+│                               │
+│   Clash 代理 127.0.0.1:7897  │  ← 能翻墙，能访问 Docker Hub
+│               ▲               │
+│               │               │
+│          SSH 反向隧道         │
+└───────────────┼───────────────┘
+                │
+                ▼
+┌──────── Linux 虚拟机 ────────┐
+│                               │
+│   0.0.0.0:7897 (隧道监听)    │  ← Linux 本身没有代理
+│        ▲                      │
+│        │                      │
+│   ┌────┴───────────────┐     │
+│   │  Minikube 容器      │     │
+│   │                     │     │
+│   │  docker pull xxx ───┼──▶ 192.168.49.1:7897 (宿主机)
+│   │                     │     │     │
+│   └─────────────────────┘     │     ▼
+│                               │  SSH 隧道 → Windows Clash → Docker Hub
+└───────────────────────────────┘
+```
+
+完整的数据流：`Minikube docker pull` → `192.168.49.1:7897`（Minikube 网关） → Linux `0.0.0.0:7897`（SSH 隧道监听） → SSH 加密转发 → Windows `127.0.0.1:7897`（Clash） → Docker Hub → 镜像数据原路返回。
+
+> **为什么用反向隧道（`-R`）而不是正向（`-L`）？**
+>
+> - 正向隧道（`-L`）：在**本机**开端口，转发到远端 → 适合 Windows 访问 Linux（如 Lens 连 K8S）
+> - 反向隧道（`-R`）：在**远端**开端口，转发到本机 → 适合 Linux 借用 Windows 的服务（如代理）
+>
+> 这里是 Linux 要借用 Windows 的 Clash，所以用 `-R`。
+
 **第一步：修改虚拟机 SSH 配置**
 
 ```bash
@@ -238,14 +272,24 @@ sed -i 's/#*GatewayPorts.*/GatewayPorts yes/' /etc/ssh/sshd_config
 systemctl restart sshd
 ```
 
+> 必须启用 `GatewayPorts`，否则 SSH 反向隧道只绑定 `127.0.0.1`，Minikube 容器通过 `192.168.49.1` 访问不到。
+
 **第二步：从 Windows 建立反向隧道**
 
 ![image-20260226172606076](k8s-deploy-guide.assets/image-20260226172606076.png)
 
 ```powershell
-# 将虚拟机的 7897 端口转发到 Windows 本机的 Clash 代理端口
 ssh -R 0.0.0.0:7897:127.0.0.1:7897 root@192.168.3.200
 ```
+
+| 参数 | 含义 |
+|------|------|
+| `-R` | 反向隧道（在远端 Linux 上开监听端口） |
+| `0.0.0.0:7897` | Linux 上监听**所有网卡**的 7897 端口 |
+| `127.0.0.1:7897` | 把流量转发到 Windows 本地的 Clash 代理 |
+| `root@192.168.3.200` | 通过 SSH 连接到 Linux 虚拟机 |
+
+> 必须绑定 `0.0.0.0` 而非 `127.0.0.1`：Minikube 容器通过 `192.168.49.1`（Minikube 专用网桥）访问 Linux 宿主机，不是 `127.0.0.1`，所以必须监听所有网卡。
 
 **第三步：获取 Minikube 容器的网关 IP**
 
@@ -464,46 +508,138 @@ kubectl port-forward svc/saas-shortener-service 8080:80 -n saas-shortener --addr
 
 ## 五、K8S 可视化面板
 
-###  Lens（桌面客户端）
+### Lens（桌面客户端）
 
 如果你想在 **Windows 主机**上远程管理虚拟机中的 K8S，Lens 是最佳选择。
 
+#### 方式 1：自动化脚本（推荐）
+
+项目提供了自动化 PowerShell 脚本，一键完成所有配置：
+
+```powershell
+# 在项目根目录执行
+cd d:\project\blog.shpym.cn\saas\saas-shortener
+.\scripts\connect-lens.ps1
+```
+
+脚本会自动：
+1. 从 Linux 虚拟机导出 kubeconfig
+2. 复制到 Windows 本地（`~\.kube\minikube-config`）
+3. 添加证书跳过验证配置
+4. 获取 Minikube 实际端口
+5. 建立 SSH 隧道（后台运行）
+
+执行完成后，在 Lens 中 File → Add Cluster → 选择 `C:\Users\你的用户名\.kube\minikube-config` 即可。
+
+**自定义参数：**
+
+```powershell
+.\scripts\connect-lens.ps1 -LinuxIP "192.168.1.100" -LinuxUser "root"
+```
+
+**关闭 SSH 隧道：**
+
+```powershell
+Get-Process | Where-Object {$_.ProcessName -eq 'ssh' -and $_.CommandLine -like '*8443*'} | Stop-Process
+```
+
+#### 方式 2：手动配置
+
 **安装与连接步骤：**
 
-1. 在 Windows 上下载安装 Lens：https://k8slens.dev/
-2. 从虚拟机复制 kubeconfig：
+**第一步：导出 kubeconfig（在 Linux 虚拟机上执行）**
 
-```powershell
-scp root@<虚拟机IP>:~/.kube/config C:\Users\你的用户名\.kube\minikube-config
+必须使用 `--flatten` 参数将证书内嵌到文件中，否则 kubeconfig 里会包含 Linux 文件路径（如 `/root/.minikube/ca.crt`），Windows 上找不到这些文件会报 `unable to read client-cert` 错误。
+
+```bash
+kubectl config view --flatten > /tmp/kubeconfig-export.yaml
 ```
 
-3. 建立 SSH 隧道（Minikube API Server 只监听容器内部，需要转发）：
+**第二步：复制到 Windows**
 
 ```powershell
-# 先查看 Minikube 容器实际暴露的端口（在 Linux 上执行）
-# docker port minikube
-# 输出示例: 8443/tcp -> 0.0.0.0:32769
-
-# Windows 上建立隧道（端口号替换为上面查到的实际端口）
-ssh -L 8443:127.0.0.1:32769 root@<虚拟机IP> -N
+scp root@192.168.3.200:/tmp/kubeconfig-export.yaml C:\Users\shihao\.kube\minikube-config
 ```
 
-> 如果 `docker port minikube` 显示 `8443/tcp -> 0.0.0.0:8443`，则隧道命令为：
-> `ssh -L 8443:127.0.0.1:8443 root@<虚拟机IP> -N`
+**第三步：编辑 kubeconfig，添加跳过证书验证**
 
-4. kubeconfig 中 `server` 保持 `https://127.0.0.1:8443` 不变
-5. 打开 Lens → File → Add Cluster → 选择或粘贴 kubeconfig 文件
-
-**如果遇到证书错误**，在 kubeconfig 的 cluster 中添加：
+在 `cluster` 下添加 `insecure-skip-tls-verify: true`（因为 SSH 隧道改变了访问地址，服务端证书的 SAN 不匹配）：
 
 ```yaml
 clusters:
 - cluster:
-    certificate-authority-data: LS0tLS1C...
-    insecure-skip-tls-verify: true    # 跳过证书验证（仅开发环境）
+    certificate-authority-data: LS0tLS1C...（保持原值）
+    insecure-skip-tls-verify: true
     server: https://127.0.0.1:8443
   name: minikube
 ```
+
+**第四步：查看 Minikube API Server 的实际端口**
+
+Minikube 用 Docker 驱动时，API Server 端口会被映射到宿主机的随机端口：
+
+```bash
+# 在 Linux 上执行
+docker port minikube
+# 输出示例:
+# 8443/tcp -> 127.0.0.1:32779
+```
+
+记住 `8443/tcp` 对应的实际端口（本例为 `32779`）。
+
+**第五步：建立 SSH 隧道（在 Windows PowerShell 执行）**
+
+Lens 在 Windows 上，API Server 在 Linux 虚拟机的 Docker 容器里，中间隔着**两层网络隔离**，必须用 SSH 隧道打通：
+
+```
+┌──────── Windows ────────┐
+│                          │
+│  Lens → 127.0.0.1:8443  │
+│              │           │
+│         SSH 隧道         │
+└──────────────┼───────────┘
+               ▼
+┌──────── Linux VM ───────┐
+│  127.0.0.1:32779        │  ← Docker 端口映射（仅绑定 127.0.0.1，外部不可达）
+│         │                │
+│  ┌──────▼──────────┐    │
+│  │ Minikube 容器    │    │
+│  │ API Server:8443 │    │
+│  └─────────────────┘    │
+└──────────────────────────┘
+```
+
+为什么需要隧道：
+- **第一层隔离**：API Server 运行在 Minikube Docker 容器内部，通过 Docker 端口映射暴露到 Linux 宿主机，但只绑定了 `127.0.0.1`（本机回环），从外部访问 `192.168.3.200:32779` 不通
+- **第二层隔离**：Windows 和 Linux 是两台不同的机器，Windows 无法访问 Linux 的 `127.0.0.1`
+
+SSH 隧道将两端桥接起来：
+
+```powershell
+ssh -L 8443:127.0.0.1:32779 root@192.168.3.200 -N
+```
+
+| 参数 | 含义 |
+|------|------|
+| `-L 8443:` | 在 Windows 本地监听 8443 端口 |
+| `127.0.0.1:32779` | 转发到 Linux 上的 127.0.0.1:32779（Minikube API Server） |
+| `root@192.168.3.200` | 通过 SSH 连接到 Linux 虚拟机 |
+| `-N` | 不打开远程 Shell，只做端口转发 |
+
+> 端口号 `32779` 替换为第四步查到的实际值。隧道窗口需保持打开。
+
+**第六步：在 Lens 中导入**
+
+File → Add Cluster → 选择 `C:\Users\shihao\.kube\minikube-config`
+
+#### 常见报错
+
+| 报错 | 原因 | 解决 |
+|------|------|------|
+| `unable to read client-cert /root/.minikube/...` | kubeconfig 中使用了 Linux 文件路径而非内嵌证书 | 用 `kubectl config view --flatten` 重新导出 |
+| `channel: open failed: connect refused` | SSH 隧道的目标端口不对 | `docker port minikube` 查实际端口 |
+| `Invalid credentials` | 证书数据不完整或被截断 | 用 `scp` 复制文件，不要手动粘贴 |
+| `certificate has expired or is not yet valid` | 虚拟机系统时间不对 | `sudo date -s "正确时间"` 并安装 chrony |
 
 Lens 功能：
 
@@ -590,11 +726,182 @@ minikube addons list
 
 ---
 
-## 七、一键部署与卸载脚本
+## 七、开机自启配置
+
+每次重启虚拟机后，需要手动 `minikube start` 和 `kubectl port-forward`，比较麻烦。通过 systemd 可以实现开机自动启动。
+
+### 7.1 Minikube 开机自启
+
+创建启动脚本和 systemd 服务：
+
+```bash
+sudo tee /usr/local/bin/minikube-start.sh <<'SCRIPT'
+#!/bin/bash
+LOG=/var/log/minikube-start.log
+echo "$(date) - Starting Minikube..." >> $LOG
+/usr/local/bin/minikube start --force >> $LOG 2>&1
+echo "$(date) - Minikube start exited with code $?" >> $LOG
+SCRIPT
+
+sudo chmod +x /usr/local/bin/minikube-start.sh
+```
+
+```bash
+# 2. 创建 systemd 服务
+sudo tee /etc/systemd/system/minikube.service <<'EOF'
+[Unit]
+Description=Minikube Kubernetes Cluster
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/usr/local/bin/minikube-start.sh
+ExecStop=/usr/local/bin/minikube stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 启用开机自启
+sudo systemctl daemon-reload
+sudo systemctl enable minikube
+```
+
+> `systemctl start minikube` 会等待 1-3 分钟直到集群就绪，这是正常行为（不是卡住）。
+> 启动日志记录在 `/var/log/minikube-start.log`，可随时查看进度。
+
+验证：
+
+```bash
+# 重启虚拟机
+sudo reboot
+
+# 重启后等 2-3 分钟，检查状态
+systemctl status minikube       # 应显示 active (exited)
+minikube status                 # 应显示 Running
+tail -f /var/log/minikube-start.log # 查看启动日志
+```
+
+### 7.2 port-forward 自动运行
+
+创建 systemd 服务，在 Minikube 启动后自动将应用端口暴露到 `0.0.0.0:8080`。
+
+**关键：ExecStartPre 等待逻辑**
+
+port-forward 依赖应用 Pod 已经就绪，所以需要先等待 Pod 变为 `Running` 状态再启动转发：
+
+```bash
+until kubectl get pod -n saas-shortener -l app=saas-shortener \
+    --field-selector=status.phase=Running -o name 2>/dev/null | grep -q pod; 
+do 
+    sleep 5; 
+done
+```
+
+| 部分 | 含义 |
+|------|------|
+| `until ... do ... done` | 循环直到条件为真才退出 |
+| `kubectl get pod -n saas-shortener` | 查询 saas-shortener 命名空间的 Pod |
+| `-l app=saas-shortener` | 标签选择器，只查询 app=saas-shortener 的 Pod |
+| `--field-selector=status.phase=Running` | 只选择状态为 Running 的 Pod |
+| `-o name` | 只输出 Pod 名称（如 `pod/saas-shortener-xxx`） |
+| `2>/dev/null` | 丢弃错误输出（命名空间或 Pod 还不存在时） |
+| `\| grep -q pod` | 静默检查输出中是否包含 "pod" 字符串 |
+| `sleep 5` | 如果没找到就等 5 秒后再试 |
+
+这样可以避免 port-forward 在 Pod 还未启动时就尝试连接导致失败。
+
+**创建服务**
+
+```bash
+# 先查找 kubectl 实际路径
+KUBECTL_PATH=$(which kubectl)
+echo "kubectl 路径: $KUBECTL_PATH"
+
+# 创建服务（动态替换路径）
+sudo tee /etc/systemd/system/k8s-port-forward.service <<EOF
+[Unit]
+Description=Kubectl Port Forward for saas-shortener
+After=minikube.service
+Requires=minikube.service
+
+[Service]
+Type=simple
+User=root
+# 等待 Pod 就绪后再转发
+ExecStartPre=/bin/bash -c 'until $KUBECTL_PATH get pod -n saas-shortener -l app=saas-shortener --field-selector=status.phase=Running -o name 2>/dev/null | grep -q pod; do sleep 5; done'
+ExecStart=$KUBECTL_PATH port-forward svc/saas-shortener-service 8080:80 -n saas-shortener --address=0.0.0.0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 启用
+sudo systemctl daemon-reload
+sudo systemctl enable k8s-port-forward
+
+# 立即启动（不用等重启）
+sudo systemctl start k8s-port-forward
+
+# 查看状态
+sudo systemctl status k8s-port-forward
+```
+
+服务特性说明：
+
+| 配置 | 作用 |
+|------|------|
+| `After=minikube.service` | 确保 Minikube 先启动完成 |
+| `ExecStartPre` | 等待应用 Pod 变为 Running 后才开始转发 |
+| `Restart=always` | 如果 port-forward 断开（如 Pod 重建），自动重连 |
+| `RestartSec=10` | 断开后 10 秒重试 |
+| `--address=0.0.0.0` | 监听所有网卡，允许外部访问 |
+
+### 7.3 验证自动化效果
+
+```bash
+# 重启虚拟机
+sudo reboot
+
+# 重启后等待约 1-2 分钟，检查服务状态
+systemctl status minikube          # 应显示 active (exited)
+systemctl status k8s-port-forward  # 应显示 active (running)
+
+# 测试访问
+curl http://localhost:8080/healthz
+
+# 从 Windows 访问
+# http://192.168.3.200:8080
+```
+
+### 7.4 管理命令
+
+```bash
+# 查看日志
+journalctl -u minikube -f
+journalctl -u k8s-port-forward -f
+
+# 手动重启 port-forward
+sudo systemctl restart k8s-port-forward
+
+# 临时禁用自启
+sudo systemctl disable minikube
+sudo systemctl disable k8s-port-forward
+```
+
+---
+
+## 八、一键部署与卸载脚本
 
 项目已提供一键部署和一键卸载脚本，在项目根目录执行即可。
 
-### 7.1 一键部署
+### 8.1 一键部署
 
 ```bash
 # 前置：minikube 已启动 (minikube start)
@@ -603,7 +910,7 @@ make k8s-deploy
 
 脚本将依次完成：构建镜像 → 创建 Namespace → 部署 PostgreSQL/Redis → 部署应用 → 启用 Ingress/HPA。
 
-### 7.2 一键卸载
+### 8.2 一键卸载
 
 ```bash
 make k8s-uninstall
