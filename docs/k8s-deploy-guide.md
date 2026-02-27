@@ -514,7 +514,13 @@ kubectl port-forward svc/saas-shortener-service 8080:80 -n saas-shortener --addr
 
 #### 方式 1：自动化脚本（推荐）
 
-项目提供了自动化 PowerShell 脚本，一键完成所有配置：
+项目提供了自动化脚本，一键完成所有配置。
+
+**双击运行（最简单）：**
+
+直接双击 `scripts\connect-lens.bat` 即可运行，无需打开命令行。
+
+**或在 PowerShell 中运行：**
 
 ```powershell
 # 在项目根目录执行

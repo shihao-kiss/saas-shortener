@@ -105,3 +105,9 @@ Write-Host ""
 Write-Host "关闭隧道：" -ForegroundColor Cyan
 Write-Host "  Get-Process | Where-Object {`$_.ProcessName -eq 'ssh' -and `$_.CommandLine -like '*8443*'} | Stop-Process" -ForegroundColor White
 Write-Host ""
+
+# 如果是双击运行（非命令行），等待用户按键
+if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host "按任意键继续..." -ForegroundColor Gray
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
