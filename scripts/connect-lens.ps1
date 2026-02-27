@@ -65,8 +65,8 @@ if (!(Test-Path $kubeconfigDir)) {
     New-Item -ItemType Directory -Path $kubeconfigDir -Force | Out-Null
 }
 
-# Replace server URL: any https://127.0.0.1:XXXXX -> https://127.0.0.1:8443
-$kubeconfigContent = $kubeconfigContent -replace "server: https://127\.0\.0\.1:\d+", "server: https://127.0.0.1:8443"
+# Replace server URL: any https://X.X.X.X:XXXX -> https://127.0.0.1:8443
+$kubeconfigContent = $kubeconfigContent -replace "server: https://[\d\.]+:\d+", "server: https://127.0.0.1:8443"
 
 # Add insecure-skip-tls-verify if not present
 if ($kubeconfigContent -notmatch "insecure-skip-tls-verify") {
