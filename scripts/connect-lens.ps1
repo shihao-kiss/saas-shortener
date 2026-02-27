@@ -73,6 +73,9 @@ if ($kubeconfigContent -notmatch "insecure-skip-tls-verify") {
     $kubeconfigContent = $kubeconfigContent -replace "(server: https://127\.0\.0\.1:8443)", "`$1`n    insecure-skip-tls-verify: true"
 }
 
+# Remove certificate-authority-data (not needed when using insecure-skip-tls-verify)
+$kubeconfigContent = $kubeconfigContent -replace "\s*certificate-authority-data:.*`n", ""
+
 Set-Content -Path $KubeconfigPath -Value $kubeconfigContent -NoNewline
 Write-Host "OK: Saved to $KubeconfigPath" -ForegroundColor Green
 Write-Host "  server: https://127.0.0.1:8443" -ForegroundColor White
@@ -89,14 +92,17 @@ if ($existingConn) {
     Write-Host "WARN: Port 8443 already in use, tunnel may exist" -ForegroundColor Yellow
 } else {
     Write-Host "  -> SSH password required (2nd time, last)" -ForegroundColor Yellow
-    Start-Process -FilePath "ssh" -ArgumentList "-L","8443:127.0.0.1:${actualPort}","${LinuxUser}@${LinuxIP}","-N" -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+    Write-Host "  -> A new window will open, enter password there" -ForegroundColor Yellow
+    Write-Host "  -> Keep that window open (closing it kills the tunnel)" -ForegroundColor Yellow
+    # Must use -WindowStyle Normal so user can enter SSH password
+    Start-Process -FilePath "ssh" -ArgumentList "-L","8443:127.0.0.1:${actualPort}","${LinuxUser}@${LinuxIP}","-N","-o","ServerAliveInterval=60" -WindowStyle Normal
+    Start-Sleep -Seconds 8
 
     $tunnel = Get-NetTCPConnection -LocalPort 8443 -State Listen -ErrorAction SilentlyContinue
     if ($tunnel) {
-        Write-Host "OK: SSH tunnel running (background)" -ForegroundColor Green
+        Write-Host "OK: SSH tunnel running" -ForegroundColor Green
     } else {
-        Write-Host "WARN: Tunnel may not have started" -ForegroundColor Yellow
+        Write-Host "WARN: Tunnel not detected yet. Enter password in the SSH window first." -ForegroundColor Yellow
     }
 }
 
