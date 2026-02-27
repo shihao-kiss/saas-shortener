@@ -1,5 +1,4 @@
-# Lens 连接 Minikube 自动化脚本
-# 用途：自动导出 kubeconfig、建立 SSH 隧道，方便 Lens 连接
+# Lens connect Minikube automation script
 
 param(
     [string]$LinuxIP = "192.168.3.200",
@@ -9,105 +8,89 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "========== Lens 连接 Minikube 自动化脚本 ==========" -ForegroundColor Green
-Write-Host "Linux 虚拟机: $LinuxUser@$LinuxIP"
-Write-Host "Kubeconfig 保存路径: $KubeconfigPath"
+Write-Host "========== Lens -> Minikube ==========" -ForegroundColor Green
+Write-Host "Linux VM: $LinuxUser@$LinuxIP"
+Write-Host "Kubeconfig: $KubeconfigPath"
 Write-Host ""
 
-# 1. 在 Linux 上导出 kubeconfig
-Write-Host "[1/5] 在 Linux 上导出 kubeconfig..." -ForegroundColor Cyan
+# 1. Export kubeconfig from Linux
+Write-Host "[1/5] Export kubeconfig..." -ForegroundColor Cyan
 ssh $LinuxUser@$LinuxIP "kubectl config view --flatten > /tmp/kubeconfig-export.yaml"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "错误: 无法连接到 Linux 或导出失败" -ForegroundColor Red
+    Write-Host "ERROR: SSH connection failed" -ForegroundColor Red
     exit 1
 }
-Write-Host "✓ 导出成功" -ForegroundColor Green
+Write-Host "OK: Export done" -ForegroundColor Green
 
-# 2. 复制到 Windows
-Write-Host "[2/5] 复制 kubeconfig 到本地..." -ForegroundColor Cyan
+# 2. Copy to Windows
+Write-Host "[2/5] Copy kubeconfig to local..." -ForegroundColor Cyan
 $kubeconfigDir = Split-Path -Parent $KubeconfigPath
 if (!(Test-Path $kubeconfigDir)) {
     New-Item -ItemType Directory -Path $kubeconfigDir -Force | Out-Null
 }
 scp "${LinuxUser}@${LinuxIP}:/tmp/kubeconfig-export.yaml" $KubeconfigPath
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "错误: 复制失败" -ForegroundColor Red
+    Write-Host "ERROR: SCP copy failed" -ForegroundColor Red
     exit 1
 }
-Write-Host "✓ 复制成功: $KubeconfigPath" -ForegroundColor Green
+Write-Host "OK: Saved to $KubeconfigPath" -ForegroundColor Green
 
-# 3. 修改 kubeconfig（添加 insecure-skip-tls-verify）
-Write-Host "[3/5] 修改 kubeconfig，添加跳过证书验证..." -ForegroundColor Cyan
+# 3. Add insecure-skip-tls-verify
+Write-Host "[3/5] Patch kubeconfig..." -ForegroundColor Cyan
 $content = Get-Content $KubeconfigPath -Raw
 if ($content -notmatch "insecure-skip-tls-verify") {
-    # 在第一个 cluster 的 server 行后插入 insecure-skip-tls-verify
-    $content = $content -replace "(server: https://127\.0\.0\.1:8443)", "`$1`n    insecure-skip-tls-verify: true"
-    Set-Content -Path $KubeconfigPath -Value $content
-    Write-Host "✓ 已添加 insecure-skip-tls-verify: true" -ForegroundColor Green
+    $content = $content -replace "(server: https://127\.0\.0\.1:\d+)", "`$1`n    insecure-skip-tls-verify: true"
+    Set-Content -Path $KubeconfigPath -Value $content -NoNewline
+    Write-Host "OK: Added insecure-skip-tls-verify" -ForegroundColor Green
 } else {
-    Write-Host "✓ 配置已存在，跳过" -ForegroundColor Green
+    Write-Host "OK: Already patched, skip" -ForegroundColor Green
 }
 
-# 4. 获取 Minikube 实际端口
-Write-Host "[4/5] 获取 Minikube API Server 实际端口..." -ForegroundColor Cyan
-$portMapping = ssh $LinuxUser@$LinuxIP "docker port minikube | grep '8443/tcp'"
+# 4. Get minikube actual port
+Write-Host "[4/5] Get Minikube API Server port..." -ForegroundColor Cyan
+$portMapping = ssh $LinuxUser@$LinuxIP "docker port minikube 2>/dev/null | grep 8443/tcp"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($portMapping)) {
-    Write-Host "错误: 无法获取端口映射，请确保 Minikube 已启动" -ForegroundColor Red
+    Write-Host "ERROR: Cannot get port. Is Minikube running?" -ForegroundColor Red
     exit 1
 }
 
-# 解析端口号（格式：8443/tcp -> 127.0.0.1:32779）
+$actualPort = ""
 if ($portMapping -match "127\.0\.0\.1:(\d+)") {
     $actualPort = $Matches[1]
-    Write-Host "✓ API Server 实际端口: $actualPort" -ForegroundColor Green
+    Write-Host "OK: API Server port = $actualPort" -ForegroundColor Green
 } else {
-    Write-Host "错误: 无法解析端口号" -ForegroundColor Red
-    Write-Host "输出: $portMapping" -ForegroundColor Yellow
+    Write-Host "ERROR: Cannot parse port" -ForegroundColor Red
     exit 1
 }
 
-# 5. 建立 SSH 隧道（检查是否已存在）
-Write-Host "[5/5] 建立 SSH 隧道..." -ForegroundColor Cyan
+# 5. Create SSH tunnel
+Write-Host "[5/5] Create SSH tunnel..." -ForegroundColor Cyan
 
-# 检查 8443 端口是否已被占用
-$existingProcess = Get-NetTCPConnection -LocalPort 8443 -ErrorAction SilentlyContinue
-if ($existingProcess) {
-    Write-Host "⚠ 端口 8443 已被占用，可能隧道已存在" -ForegroundColor Yellow
-    Write-Host "  如需重建隧道，请先关闭占用该端口的进程" -ForegroundColor Yellow
+$existingConn = Get-NetTCPConnection -LocalPort 8443 -ErrorAction SilentlyContinue
+if ($existingConn) {
+    Write-Host "WARN: Port 8443 already in use, tunnel may exist" -ForegroundColor Yellow
 } else {
-    # 后台启动 SSH 隧道
-    Write-Host "正在启动 SSH 隧道: 8443 -> $actualPort..." -ForegroundColor Cyan
-    Start-Process -FilePath "ssh" -ArgumentList "-L","8443:127.0.0.1:$actualPort","${LinuxUser}@${LinuxIP}","-N" -WindowStyle Hidden
+    Write-Host "Starting tunnel: localhost:8443 -> $actualPort ..." -ForegroundColor Cyan
+    Start-Process -FilePath "ssh" -ArgumentList "-L","8443:127.0.0.1:${actualPort}","${LinuxUser}@${LinuxIP}","-N" -WindowStyle Hidden
     Start-Sleep -Seconds 2
-    
-    # 验证隧道是否成功
+
     $tunnel = Get-NetTCPConnection -LocalPort 8443 -State Listen -ErrorAction SilentlyContinue
     if ($tunnel) {
-        Write-Host "✓ SSH 隧道已建立（后台运行）" -ForegroundColor Green
+        Write-Host "OK: SSH tunnel running (background)" -ForegroundColor Green
     } else {
-        Write-Host "⚠ 隧道可能未成功启动，请检查 SSH 连接" -ForegroundColor Yellow
+        Write-Host "WARN: Tunnel may not have started" -ForegroundColor Yellow
     }
 }
 
-# 完成提示
 Write-Host ""
-Write-Host "========== 配置完成 ==========" -ForegroundColor Green
+Write-Host "========== ALL DONE ==========" -ForegroundColor Green
 Write-Host ""
-Write-Host "下一步操作：" -ForegroundColor Cyan
-Write-Host "  1. 打开 Lens Desktop" -ForegroundColor White
-Write-Host "  2. File → Add Cluster" -ForegroundColor White
-Write-Host "  3. 选择文件: $KubeconfigPath" -ForegroundColor White
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1. Open Lens Desktop"
+Write-Host "  2. File -> Add Cluster"
+Write-Host "  3. Select: $KubeconfigPath"
 Write-Host ""
-Write-Host "SSH 隧道信息：" -ForegroundColor Cyan
-Write-Host "  本地监听: 127.0.0.1:8443" -ForegroundColor White
-Write-Host "  转发到: $LinuxIP → Minikube 端口 $actualPort" -ForegroundColor White
+Write-Host "Tunnel info:" -ForegroundColor Cyan
+Write-Host "  Local:  127.0.0.1:8443"
+Write-Host "  Remote: $LinuxIP -> Minikube:$actualPort"
 Write-Host ""
-Write-Host "关闭隧道：" -ForegroundColor Cyan
-Write-Host "  Get-Process | Where-Object {`$_.ProcessName -eq 'ssh' -and `$_.CommandLine -like '*8443*'} | Stop-Process" -ForegroundColor White
-Write-Host ""
-
-# 如果是双击运行（非命令行），等待用户按键
-if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    Write-Host "按任意键继续..." -ForegroundColor Gray
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}
